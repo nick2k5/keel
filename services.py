@@ -4,12 +4,12 @@ import json
 import re
 import requests
 from typing import Dict, List, Optional, Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qs
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google.cloud import firestore
 import vertexai
-from vertexai.preview.generative_models import GenerativeModel
+from vertexai.generative_models import GenerativeModel
 from bs4 import BeautifulSoup
 from config import config
 
@@ -28,7 +28,7 @@ class SheetsService:
         try:
             result = self.service.spreadsheets().values().get(
                 spreadsheetId=self.spreadsheet_id,
-                range='Index!A:C'
+                range='Index!A:D'
             ).execute()
 
             values = result.get('values', [])
@@ -47,6 +47,7 @@ class SheetsService:
                 company = row[0].strip() if len(row) > 0 else ""
                 domain = row[1].strip() if len(row) > 1 else ""
                 status = row[2].strip() if len(row) > 2 else ""
+                source = row[3].strip() if len(row) > 3 else ""
 
                 # Process if Status is empty or "New"
                 if not status or status == "New":
@@ -55,11 +56,50 @@ class SheetsService:
                             'row_number': idx,
                             'company': company,
                             'domain': domain,
-                            'status': status
+                            'status': status,
+                            'source': source
                         })
 
             logger.info(f"Found {len(rows_to_process)} rows to process")
             return rows_to_process
+
+        except Exception as e:
+            logger.error(f"Error reading spreadsheet: {e}", exc_info=True)
+            raise
+
+    def get_all_companies(self) -> List[Dict]:
+        """Get ALL companies from Index tab (for force regeneration)."""
+        try:
+            result = self.service.spreadsheets().values().get(
+                spreadsheetId=self.spreadsheet_id,
+                range='Index!A:D'
+            ).execute()
+
+            values = result.get('values', [])
+            if not values:
+                logger.info("No data found in spreadsheet")
+                return []
+
+            companies = []
+            for idx, row in enumerate(values[1:], start=2):
+                if len(row) < 1:
+                    continue
+
+                company = row[0].strip() if len(row) > 0 else ""
+                domain = row[1].strip() if len(row) > 1 else ""
+
+                # Only include rows that have at least a company name
+                if company:
+                    companies.append({
+                        'row_number': idx,
+                        'company': company,
+                        'domain': domain,
+                        'status': row[2].strip() if len(row) > 2 else "",
+                        'source': row[3].strip() if len(row) > 3 else ""
+                    })
+
+            logger.info(f"Found {len(companies)} total companies in sheet")
+            return companies
 
         except Exception as e:
             logger.error(f"Error reading spreadsheet: {e}", exc_info=True)
@@ -84,46 +124,172 @@ class SheetsService:
             logger.error(f"Error updating status for row {row_number}: {e}", exc_info=True)
             raise
 
-    def add_company(self, company: str, domain: str) -> Dict[str, Any]:
-        """Add a new company to the spreadsheet."""
-        try:
-            # Clean up domain
-            clean_domain = domain.lower().strip()
-            clean_domain = re.sub(r'^https?://', '', clean_domain)
-            clean_domain = re.sub(r'^www\.', '', clean_domain)
-            clean_domain = re.sub(r'/.*$', '', clean_domain)
+    def update_company(self, identifier: str, new_domain: str = None, new_name: str = None) -> Dict[str, Any]:
+        """Update a company's domain or name in the spreadsheet.
 
-            # Check if domain already exists
+        Args:
+            identifier: Company name or domain to find
+            new_domain: New domain to set (optional)
+            new_name: New company name to set (optional)
+        """
+        try:
+            # Get all companies to find the matching row
             result = self.service.spreadsheets().values().get(
                 spreadsheetId=self.spreadsheet_id,
-                range='Index!A:C'
+                range='Index!A:D'
             ).execute()
 
             values = result.get('values', [])
-            for i, row in enumerate(values[1:], start=2):
-                if len(row) > 1:
-                    existing_domain = row[1].lower().strip()
-                    if existing_domain == clean_domain:
-                        return {
-                            'success': False,
-                            'error': f"Company with domain {clean_domain} already exists (row {i}: {row[0]})"
-                        }
+            if not values:
+                return {'success': False, 'error': 'No data found in spreadsheet'}
 
-            # Append new row
-            self.service.spreadsheets().values().append(
+            clean_identifier = identifier.lower().strip()
+            # Also clean URL format from identifier
+            clean_identifier = re.sub(r'^https?://', '', clean_identifier)
+            clean_identifier = re.sub(r'^www\.', '', clean_identifier)
+            clean_identifier = re.sub(r'/.*$', '', clean_identifier)
+
+            found_row = None
+            found_data = None
+
+            for i, row in enumerate(values[1:], start=2):
+                existing_company = row[0].lower().strip() if len(row) > 0 else ''
+                existing_domain = row[1].lower().strip() if len(row) > 1 else ''
+
+                # Match by company name or domain
+                if clean_identifier == existing_company or clean_identifier == existing_domain:
+                    found_row = i
+                    found_data = {
+                        'company': row[0] if len(row) > 0 else '',
+                        'domain': row[1] if len(row) > 1 else '',
+                        'status': row[2] if len(row) > 2 else '',
+                        'source': row[3] if len(row) > 3 else ''
+                    }
+                    break
+
+            if not found_row:
+                return {'success': False, 'error': f"Company '{identifier}' not found in spreadsheet"}
+
+            # Clean the new domain if provided
+            clean_new_domain = ''
+            if new_domain:
+                clean_new_domain = new_domain.lower().strip()
+                clean_new_domain = re.sub(r'^https?://', '', clean_new_domain)
+                clean_new_domain = re.sub(r'^www\.', '', clean_new_domain)
+                clean_new_domain = re.sub(r'/.*$', '', clean_new_domain)
+
+            updates = []
+
+            # Update domain (column B)
+            if new_domain and clean_new_domain != found_data['domain']:
+                self.service.spreadsheets().values().update(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=f'Index!B{found_row}',
+                    valueInputOption='RAW',
+                    body={'values': [[clean_new_domain]]}
+                ).execute()
+                updates.append(f"domain: {found_data['domain']} → {clean_new_domain}")
+
+            # Update company name (column A)
+            if new_name and new_name.strip().lower() != found_data['company'].lower():
+                self.service.spreadsheets().values().update(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=f'Index!A{found_row}',
+                    valueInputOption='RAW',
+                    body={'values': [[new_name.strip()]]}
+                ).execute()
+                updates.append(f"name: {found_data['company']} → {new_name.strip()}")
+
+            # Clear the processed status so it can be reprocessed with correct domain
+            if updates and found_data['status']:
+                self.service.spreadsheets().values().update(
+                    spreadsheetId=self.spreadsheet_id,
+                    range=f'Index!C{found_row}',
+                    valueInputOption='RAW',
+                    body={'values': [['']]}
+                ).execute()
+                updates.append("status cleared for reprocessing")
+
+            if not updates:
+                return {
+                    'success': True,
+                    'company': found_data['company'],
+                    'message': 'No changes needed - values are the same'
+                }
+
+            logger.info(f"Updated company {found_data['company']}: {', '.join(updates)}")
+
+            return {
+                'success': True,
+                'company': found_data['company'],
+                'old_domain': found_data['domain'],
+                'new_domain': clean_new_domain if new_domain else found_data['domain'],
+                'updates': updates,
+                'row_number': found_row
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating company: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+    def add_company(self, company: str, domain: str = '', source: str = '') -> Dict[str, Any]:
+        """Add a new company to the spreadsheet.
+
+        Args:
+            company: Company name
+            domain: Company domain (optional)
+            source: Source of the company, e.g., 'W26' for YC batch (optional)
+        """
+        try:
+            # Clean up domain if provided
+            clean_domain = ''
+            if domain:
+                clean_domain = domain.lower().strip()
+                clean_domain = re.sub(r'^https?://', '', clean_domain)
+                clean_domain = re.sub(r'^www\.', '', clean_domain)
+                clean_domain = re.sub(r'/.*$', '', clean_domain)
+
+            # Check if company/domain already exists
+            result = self.service.spreadsheets().values().get(
                 spreadsheetId=self.spreadsheet_id,
-                range='Index!A:C',
-                valueInputOption='RAW',
-                insertDataOption='INSERT_ROWS',
-                body={'values': [[company.strip(), clean_domain, '']]}
+                range='Index!A:D'
             ).execute()
 
-            logger.info(f"Added company: {company} ({clean_domain})")
+            values = result.get('values', [])
+            clean_company = company.strip().lower()
+
+            for i, row in enumerate(values[1:], start=2):
+                existing_company = row[0].lower().strip() if len(row) > 0 else ''
+                existing_domain = row[1].lower().strip() if len(row) > 1 else ''
+
+                # Check by domain if provided, otherwise by company name
+                if clean_domain and existing_domain == clean_domain:
+                    return {
+                        'success': False,
+                        'error': f"Company with domain {clean_domain} already exists (row {i}: {row[0]})"
+                    }
+                if not clean_domain and existing_company == clean_company:
+                    return {
+                        'success': False,
+                        'error': f"Company {company} already exists (row {i})"
+                    }
+
+            # Append new row with Source column
+            self.service.spreadsheets().values().append(
+                spreadsheetId=self.spreadsheet_id,
+                range='Index!A:D',
+                valueInputOption='RAW',
+                insertDataOption='INSERT_ROWS',
+                body={'values': [[company.strip(), clean_domain, '', source]]}
+            ).execute()
+
+            logger.info(f"Added company: {company} ({clean_domain or 'no domain'}) [source: {source or 'none'}]")
 
             return {
                 'success': True,
                 'company': company.strip(),
-                'domain': clean_domain
+                'domain': clean_domain,
+                'source': source
             }
 
         except Exception as e:
@@ -186,6 +352,40 @@ class FirestoreService:
             return True
         logger.info(f"No processed record found for {domain}")
         return False
+
+    def get_yc_company_data(self, company_name: str) -> Optional[Dict[str, Any]]:
+        """Get stored YC company data (posts, founders) for a company."""
+        company_key = company_name.lower().replace(' ', '-')
+        doc_ref = self.db.collection('yc_companies').document(company_key)
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict()
+        return None
+
+    def get_relationship_data(self, domain: str = None, company_name: str = None) -> Optional[Dict[str, Any]]:
+        """Get relationship data (emails, timeline, contacts) for a company.
+
+        Args:
+            domain: Company domain to look up
+            company_name: Company name to look up (fallback if no domain)
+        """
+        # Try by domain first
+        if domain:
+            normalized = domain.lower().strip()
+            doc_ref = self.db.collection('relationships').document(normalized)
+            doc = doc_ref.get()
+            if doc.exists:
+                return doc.to_dict()
+
+        # Try by company name as key
+        if company_name:
+            company_key = company_name.lower().replace(' ', '-')
+            doc_ref = self.db.collection('relationships').document(company_key)
+            doc = doc_ref.get()
+            if doc.exists:
+                return doc.to_dict()
+
+        return None
 
 
 class DriveService:
@@ -258,11 +458,40 @@ class DriveService:
             logger.error(f"Error creating folder for {company}: {e}", exc_info=True)
             raise
 
+    def find_document_in_folder(self, folder_id: str, doc_name: str) -> Optional[str]:
+        """Find a document by name in a folder."""
+        try:
+            query = f"name = '{doc_name}' and '{folder_id}' in parents and mimeType = 'application/vnd.google-apps.document' and trashed = false"
+            results = self.service.files().list(
+                q=query,
+                fields='files(id, name)',
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True
+            ).execute()
+
+            files = results.get('files', [])
+            if files:
+                doc_id = files[0]['id']
+                logger.info(f"Found existing document '{doc_name}' with ID: {doc_id}")
+                return doc_id
+            return None
+
+        except Exception as e:
+            logger.warning(f"Error searching for document: {e}")
+            return None
+
     def create_document(self, folder_id: str, company: str) -> str:
-        """Create a new Google Doc in the specified folder."""
+        """Get or create the 'Initial Brief' document in the specified folder."""
+        doc_name = "Initial Brief"
+
+        # Check for existing Initial Brief document
+        existing_doc_id = self.find_document_in_folder(folder_id, doc_name)
+        if existing_doc_id:
+            return existing_doc_id
+
         try:
             file_metadata = {
-                'name': f"{company} - Investment Memo",
+                'name': doc_name,
                 'mimeType': 'application/vnd.google-apps.document',
                 'parents': [folder_id]
             }
@@ -274,7 +503,7 @@ class DriveService:
             ).execute()
 
             doc_id = doc.get('id')
-            logger.info(f"Created document with ID: {doc_id}")
+            logger.info(f"Created document '{doc_name}' with ID: {doc_id}")
             return doc_id
 
         except Exception as e:
@@ -283,7 +512,7 @@ class DriveService:
 
 
 class ResearchService:
-    """Service for researching companies via web scraping."""
+    """Deep research service for comprehensive company investigation."""
 
     HEADERS = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -291,290 +520,804 @@ class ResearchService:
         'Accept-Language': 'en-US,en;q=0.5',
     }
 
+    # Maximum pages to crawl per domain
+    MAX_DOMAIN_PAGES = 15
+    # Maximum external pages to scrape from search results
+    MAX_EXTERNAL_PAGES = 10
+    # Request timeout
+    TIMEOUT = 10
+
     def __init__(self):
         self.linkedin_cookie = config.linkedin_cookie
         self.session = requests.Session()
         self.session.headers.update(self.HEADERS)
 
-    def research_company(self, company: str, domain: str) -> Dict[str, Any]:
-        """Perform comprehensive research on a company."""
-        logger.info(f"Researching {company} ({domain})")
+    def research_company(self, company: str, domain: str, source: str = '') -> Dict[str, Any]:
+        """Perform deep research on a company."""
+        logger.info(f"Starting deep research for {company} ({domain or 'no domain'}) [source: {source or 'none'}]")
 
         research = {
             'company': company,
             'domain': domain,
-            'website': {},
-            'google_results': [],
-            'linkedin_people': [],
+            'source': source,
+            'domain_pages': {},      # All pages crawled from company domain
+            'search_results': [],     # Search result snippets
+            'external_content': {},   # Content scraped from external sources
+            'crunchbase': {},         # Crunchbase data
+            'yc_data': {},           # Y Combinator data
+            'news_articles': [],      # News articles found
             'errors': []
         }
 
-        # 1. Scrape company website
-        try:
-            research['website'] = self._scrape_website(domain)
-        except Exception as e:
-            logger.error(f"Error scraping website: {e}")
-            research['errors'].append(f"Website scraping failed: {str(e)}")
-
-        # 2. Google search for company info
-        try:
-            research['google_results'] = self._google_search(company, domain)
-        except Exception as e:
-            logger.error(f"Error with Google search: {e}")
-            research['errors'].append(f"Google search failed: {str(e)}")
-
-        # 3. LinkedIn search for founders/team
-        if self.linkedin_cookie:
+        # 1. Deep crawl the company domain
+        if domain:
             try:
-                research['linkedin_people'] = self._linkedin_search(company, domain)
+                research['domain_pages'] = self._crawl_domain(domain)
+                logger.info(f"Crawled {len(research['domain_pages'])} pages from {domain}")
             except Exception as e:
-                logger.error(f"Error with LinkedIn search: {e}")
-                research['errors'].append(f"LinkedIn search failed: {str(e)}")
+                logger.error(f"Error crawling domain: {e}")
+                research['errors'].append(f"Domain crawl failed: {str(e)}")
 
-        logger.info(f"Research complete for {company}: {len(research['google_results'])} Google results, {len(research['linkedin_people'])} LinkedIn profiles")
+        # 2. Search using DuckDuckGo (free, no API key needed)
+        try:
+            research['search_results'] = self._deep_search(company, domain, source)
+            logger.info(f"Found {len(research['search_results'])} search results")
+        except Exception as e:
+            logger.error(f"Error with search: {e}")
+            research['errors'].append(f"Search failed: {str(e)}")
+
+        # 3. Scrape external pages from search results
+        try:
+            research['external_content'] = self._scrape_external_pages(research['search_results'])
+            logger.info(f"Scraped {len(research['external_content'])} external pages")
+        except Exception as e:
+            logger.error(f"Error scraping external pages: {e}")
+            research['errors'].append(f"External scraping failed: {str(e)}")
+
+        # 4. Try Crunchbase
+        try:
+            research['crunchbase'] = self._scrape_crunchbase(company, domain)
+        except Exception as e:
+            logger.warning(f"Crunchbase scrape failed: {e}")
+
+        # 5. Try Y Combinator directory
+        if source and source.upper().startswith(('W', 'S')):
+            try:
+                research['yc_data'] = self._scrape_yc_directory(company)
+            except Exception as e:
+                logger.warning(f"YC directory scrape failed: {e}")
+
+        total_content = (
+            len(research['domain_pages']) +
+            len(research['search_results']) +
+            len(research['external_content'])
+        )
+        logger.info(f"Research complete for {company}: {total_content} total content items")
         return research
 
-    def _scrape_website(self, domain: str) -> Dict[str, Any]:
-        """Scrape the company website for key information."""
+    def _crawl_domain(self, domain: str) -> Dict[str, str]:
+        """Crawl entire domain starting from homepage, following internal links."""
         base_url = f"https://{domain}"
-        website_data = {
-            'homepage': '',
-            'about': '',
-            'team': '',
-            'meta_description': '',
-            'title': ''
-        }
+        pages = {}
+        visited = set()
+        to_visit = [base_url]
 
-        # Scrape homepage
-        try:
-            resp = self.session.get(base_url, timeout=10)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, 'lxml')
+        # First try to get sitemap
+        sitemap_urls = self._get_sitemap_urls(domain)
+        if sitemap_urls:
+            to_visit.extend(sitemap_urls[:20])  # Add up to 20 sitemap URLs
+            logger.info(f"Found {len(sitemap_urls)} URLs in sitemap")
 
-            # Extract meta info
-            title_tag = soup.find('title')
-            website_data['title'] = title_tag.get_text(strip=True) if title_tag else ''
-
-            meta_desc = soup.find('meta', attrs={'name': 'description'})
-            website_data['meta_description'] = meta_desc.get('content', '') if meta_desc else ''
-
-            # Extract main content (remove scripts, styles, nav, footer)
-            for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
-                tag.decompose()
-
-            website_data['homepage'] = self._clean_text(soup.get_text())[:5000]
-
-        except Exception as e:
-            logger.warning(f"Error scraping homepage: {e}")
-
-        # Try to find and scrape about page
-        about_paths = ['/about', '/about-us', '/company', '/about-us/', '/company/about']
-        for path in about_paths:
-            try:
-                resp = self.session.get(urljoin(base_url, path), timeout=10)
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.text, 'lxml')
-                    for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
-                        tag.decompose()
-                    website_data['about'] = self._clean_text(soup.get_text())[:5000]
-                    break
-            except Exception:
-                continue
-
-        # Try to find and scrape team page
-        team_paths = ['/team', '/about/team', '/people', '/leadership', '/our-team', '/about-us/team']
-        for path in team_paths:
-            try:
-                resp = self.session.get(urljoin(base_url, path), timeout=10)
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.text, 'lxml')
-                    for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
-                        tag.decompose()
-                    website_data['team'] = self._clean_text(soup.get_text())[:5000]
-                    break
-            except Exception:
-                continue
-
-        return website_data
-
-    def _google_search(self, company: str, domain: str) -> List[Dict[str, str]]:
-        """Search Google for company information."""
-        results = []
-
-        # Search queries to try
-        queries = [
-            f'"{company}" {domain} company',
-            f'"{company}" founders CEO',
-            f'"{company}" funding raised investors',
-            f'site:crunchbase.com "{company}"',
-            f'site:techcrunch.com "{company}"',
+        # Also add common important paths
+        important_paths = [
+            '/', '/about', '/about-us', '/team', '/company', '/product', '/products',
+            '/features', '/pricing', '/blog', '/news', '/press', '/careers',
+            '/contact', '/faq', '/help', '/founders', '/leadership', '/story',
+            '/mission', '/vision', '/customers', '/case-studies', '/solutions'
         ]
+        for path in important_paths:
+            to_visit.append(urljoin(base_url, path))
 
-        for query in queries[:3]:  # Limit to first 3 queries to avoid rate limiting
+        while to_visit and len(pages) < self.MAX_DOMAIN_PAGES:
+            url = to_visit.pop(0)
+
+            # Normalize URL
+            parsed = urlparse(url)
+            if parsed.netloc and parsed.netloc != domain and not parsed.netloc.endswith('.' + domain):
+                continue  # Skip external links
+            normalized_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip('/')
+
+            if normalized_url in visited:
+                continue
+            visited.add(normalized_url)
+
             try:
-                # Use Google's public search (note: may be rate limited)
-                search_url = f"https://www.google.com/search?q={requests.utils.quote(query)}"
-                resp = self.session.get(search_url, timeout=10)
+                resp = self.session.get(url, timeout=self.TIMEOUT, allow_redirects=True)
+                if resp.status_code != 200:
+                    continue
 
-                if resp.status_code == 200:
-                    soup = BeautifulSoup(resp.text, 'lxml')
+                content_type = resp.headers.get('content-type', '')
+                if 'text/html' not in content_type:
+                    continue
 
-                    # Extract search results
-                    for g in soup.select('div.g')[:3]:  # Top 3 results per query
-                        title_elem = g.select_one('h3')
-                        link_elem = g.select_one('a')
-                        snippet_elem = g.select_one('div[data-sncf]') or g.select_one('.VwiC3b')
+                soup = BeautifulSoup(resp.text, 'lxml')
 
-                        if title_elem and link_elem:
-                            results.append({
-                                'title': title_elem.get_text(strip=True),
-                                'url': link_elem.get('href', ''),
-                                'snippet': snippet_elem.get_text(strip=True) if snippet_elem else ''
-                            })
+                # Extract page title
+                title = ''
+                title_tag = soup.find('title')
+                if title_tag:
+                    title = title_tag.get_text(strip=True)
+
+                # Extract meta description
+                meta_desc = ''
+                meta_tag = soup.find('meta', attrs={'name': 'description'})
+                if meta_tag:
+                    meta_desc = meta_tag.get('content', '')
+
+                # Remove non-content elements
+                for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript', 'iframe']):
+                    tag.decompose()
+
+                # Extract text content
+                text = self._clean_text(soup.get_text())
+
+                if text and len(text) > 100:  # Only keep pages with substantial content
+                    pages[normalized_url] = {
+                        'title': title,
+                        'meta_description': meta_desc,
+                        'content': text[:8000]  # Limit per page
+                    }
+
+                # Find internal links to crawl
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    full_url = urljoin(url, href)
+                    parsed_link = urlparse(full_url)
+
+                    # Only follow internal links
+                    if parsed_link.netloc == domain or parsed_link.netloc.endswith('.' + domain) or not parsed_link.netloc:
+                        clean_url = f"{parsed_link.scheme or 'https'}://{parsed_link.netloc or domain}{parsed_link.path}".rstrip('/')
+                        if clean_url not in visited and clean_url not in to_visit:
+                            to_visit.append(clean_url)
 
             except Exception as e:
-                logger.warning(f"Google search error for '{query}': {e}")
+                logger.debug(f"Error crawling {url}: {e}")
                 continue
 
-        return results[:10]  # Return top 10 results
+        return pages
 
-    def _linkedin_search(self, company: str, domain: str) -> List[Dict[str, str]]:
-        """Search LinkedIn for company founders and key people."""
-        if not self.linkedin_cookie:
-            return []
+    def _get_sitemap_urls(self, domain: str) -> List[str]:
+        """Try to get URLs from sitemap.xml."""
+        urls = []
+        sitemap_locations = [
+            f"https://{domain}/sitemap.xml",
+            f"https://{domain}/sitemap_index.xml",
+            f"https://www.{domain}/sitemap.xml",
+        ]
 
-        people = []
+        for sitemap_url in sitemap_locations:
+            try:
+                resp = self.session.get(sitemap_url, timeout=self.TIMEOUT)
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, 'lxml-xml')
+                    for loc in soup.find_all('loc'):
+                        urls.append(loc.get_text(strip=True))
+                    if urls:
+                        break
+            except Exception:
+                continue
 
-        # Set up LinkedIn session with cookie
-        linkedin_headers = {
-            **self.HEADERS,
-            'Cookie': self.linkedin_cookie,
-            'csrf-token': 'ajax:123456789',
-        }
+        return urls
+
+    def _deep_search(self, company: str, domain: str, source: str = '') -> List[Dict[str, str]]:
+        """Perform deep search using Serper API (Google results)."""
+        results = []
+
+        # Check if Serper API key is configured
+        if not config.serper_api_key:
+            logger.warning("Serper API key not configured, skipping web search")
+            return results
+
+        # Build multiple search queries for comprehensive coverage
+        queries = []
+
+        # Basic company queries
+        if domain:
+            queries.extend([
+                f'{company} {domain}',
+                f'{company} company',
+            ])
+        else:
+            queries.extend([
+                f'{company} company startup',
+                f'{company} tech company',
+            ])
+
+        # Founder/team queries
+        queries.extend([
+            f'{company} founders',
+            f'{company} CEO founder',
+            f'{company} team leadership',
+        ])
+
+        # Funding/business queries
+        queries.extend([
+            f'{company} funding raised',
+            f'{company} series seed investors',
+        ])
+
+        # News/press queries
+        queries.extend([
+            f'{company} TechCrunch',
+            f'{company} news announcement',
+        ])
+
+        # Source-specific queries (YC)
+        if source and source.upper().startswith(('W', 'S')):
+            queries.extend([
+                f'{company} Y Combinator {source}',
+                f'site:ycombinator.com {company}',
+            ])
+
+        # Execute searches with Serper (limit to avoid burning through quota)
+        for query in queries[:8]:  # Run up to 8 different searches
+            try:
+                serper_results = self._serper_search(query)
+                results.extend(serper_results)
+            except Exception as e:
+                logger.debug(f"Search error for '{query}': {e}")
+                continue
+
+        # Deduplicate by URL
+        seen_urls = set()
+        unique_results = []
+        for r in results:
+            if r['url'] not in seen_urls:
+                seen_urls.add(r['url'])
+                unique_results.append(r)
+
+        return unique_results
+
+    def _serper_search(self, query: str) -> List[Dict[str, str]]:
+        """Search using Serper API (Google results)."""
+        results = []
 
         try:
-            # Search for people at the company
-            search_url = f"https://www.linkedin.com/search/results/people/?keywords={requests.utils.quote(company)}&origin=GLOBAL_SEARCH_HEADER"
+            resp = requests.post(
+                'https://google.serper.dev/search',
+                headers={
+                    'X-API-KEY': config.serper_api_key,
+                    'Content-Type': 'application/json'
+                },
+                json={'q': query, 'num': 10},
+                timeout=self.TIMEOUT
+            )
 
-            resp = self.session.get(search_url, headers=linkedin_headers, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json()
+                for item in data.get('organic', []):
+                    results.append({
+                        'title': item.get('title', ''),
+                        'url': item.get('link', ''),
+                        'snippet': item.get('snippet', '')
+                    })
+
+        except Exception as e:
+            logger.debug(f"Serper search error: {e}")
+
+        return results
+
+    def _scrape_external_pages(self, search_results: List[Dict[str, str]]) -> Dict[str, str]:
+        """Scrape content from external pages found in search results."""
+        external_content = {}
+        scraped_count = 0
+
+        # Prioritize certain domains
+        priority_domains = ['techcrunch.com', 'crunchbase.com', 'ycombinator.com', 'forbes.com',
+                          'bloomberg.com', 'reuters.com', 'venturebeat.com', 'producthunt.com']
+
+        # Sort results to prioritize important sources
+        sorted_results = sorted(search_results, key=lambda r: (
+            0 if any(d in r.get('url', '') for d in priority_domains) else 1
+        ))
+
+        for result in sorted_results:
+            if scraped_count >= self.MAX_EXTERNAL_PAGES:
+                break
+
+            url = result.get('url', '')
+            if not url or not url.startswith('http'):
+                continue
+
+            # Skip certain domains
+            skip_domains = ['linkedin.com', 'facebook.com', 'twitter.com', 'instagram.com',
+                           'youtube.com', 'google.com', 'bing.com', 'duckduckgo.com']
+            if any(d in url for d in skip_domains):
+                continue
+
+            try:
+                resp = self.session.get(url, timeout=self.TIMEOUT)
+                if resp.status_code != 200:
+                    continue
+
+                content_type = resp.headers.get('content-type', '')
+                if 'text/html' not in content_type:
+                    continue
+
+                soup = BeautifulSoup(resp.text, 'lxml')
+
+                # Remove non-content elements
+                for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'noscript', 'iframe', 'ads']):
+                    tag.decompose()
+
+                # Try to find article/main content
+                article = soup.find('article') or soup.find('main') or soup.find(class_=re.compile(r'article|content|post'))
+                if article:
+                    text = self._clean_text(article.get_text())
+                else:
+                    text = self._clean_text(soup.get_text())
+
+                if text and len(text) > 200:
+                    external_content[url] = {
+                        'title': result.get('title', ''),
+                        'content': text[:5000]
+                    }
+                    scraped_count += 1
+
+            except Exception as e:
+                logger.debug(f"Error scraping {url}: {e}")
+                continue
+
+        return external_content
+
+    def _scrape_crunchbase(self, company: str, domain: str) -> Dict[str, Any]:
+        """Try to scrape Crunchbase for company info."""
+        data = {}
+
+        # Try company slug variations
+        slugs = [
+            company.lower().replace(' ', '-'),
+            company.lower().replace(' ', ''),
+            domain.split('.')[0] if domain else ''
+        ]
+
+        for slug in slugs:
+            if not slug:
+                continue
+            try:
+                url = f"https://www.crunchbase.com/organization/{slug}"
+                resp = self.session.get(url, timeout=self.TIMEOUT)
+
+                if resp.status_code == 200:
+                    soup = BeautifulSoup(resp.text, 'lxml')
+
+                    # Extract what we can from the page
+                    for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
+                        tag.decompose()
+
+                    text = self._clean_text(soup.get_text())
+                    if text and 'crunchbase' in text.lower():
+                        data = {
+                            'url': url,
+                            'content': text[:5000]
+                        }
+                        break
+
+            except Exception:
+                continue
+
+        return data
+
+    def _scrape_yc_directory(self, company: str) -> Dict[str, Any]:
+        """Try to scrape Y Combinator directory for company info."""
+        data = {}
+
+        try:
+            # Try YC company directory
+            slug = company.lower().replace(' ', '-')
+            url = f"https://www.ycombinator.com/companies/{slug}"
+            resp = self.session.get(url, timeout=self.TIMEOUT)
 
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, 'lxml')
 
-                # Try to find people results
-                # LinkedIn's HTML structure varies, so we try multiple selectors
-                for result in soup.select('.entity-result__item, .search-result__wrapper')[:10]:
-                    name_elem = result.select_one('.entity-result__title-text a, .actor-name')
-                    title_elem = result.select_one('.entity-result__primary-subtitle, .subline-level-1')
-                    link_elem = result.select_one('a[href*="/in/"]')
+                for tag in soup(['script', 'style', 'nav', 'footer', 'header']):
+                    tag.decompose()
 
-                    if name_elem:
-                        person = {
-                            'name': name_elem.get_text(strip=True),
-                            'title': title_elem.get_text(strip=True) if title_elem else '',
-                            'linkedin_url': ''
-                        }
-
-                        if link_elem:
-                            href = link_elem.get('href', '')
-                            if '/in/' in href:
-                                # Extract clean LinkedIn URL
-                                parsed = urlparse(href)
-                                person['linkedin_url'] = f"https://www.linkedin.com{parsed.path.split('?')[0]}"
-
-                        # Filter for likely founders/executives
-                        title_lower = person['title'].lower()
-                        if any(role in title_lower for role in ['founder', 'ceo', 'cto', 'coo', 'chief', 'co-founder', 'president', 'partner']):
-                            people.append(person)
+                text = self._clean_text(soup.get_text())
+                if text and len(text) > 200:
+                    data = {
+                        'url': url,
+                        'content': text[:5000]
+                    }
 
         except Exception as e:
-            logger.warning(f"LinkedIn search error: {e}")
+            logger.debug(f"YC directory scrape error: {e}")
 
-        # Also try company page
-        try:
-            company_slug = company.lower().replace(' ', '-').replace(',', '').replace('.', '')
-            company_url = f"https://www.linkedin.com/company/{company_slug}/people/"
-
-            resp = self.session.get(company_url, headers=linkedin_headers, timeout=15)
-
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, 'lxml')
-
-                for result in soup.select('.org-people-profile-card')[:10]:
-                    name_elem = result.select_one('.org-people-profile-card__profile-title')
-                    title_elem = result.select_one('.lt-line-clamp--single-line')
-                    link_elem = result.select_one('a[href*="/in/"]')
-
-                    if name_elem:
-                        person = {
-                            'name': name_elem.get_text(strip=True),
-                            'title': title_elem.get_text(strip=True) if title_elem else '',
-                            'linkedin_url': ''
-                        }
-
-                        if link_elem:
-                            href = link_elem.get('href', '')
-                            if '/in/' in href:
-                                parsed = urlparse(href)
-                                person['linkedin_url'] = f"https://www.linkedin.com{parsed.path.split('?')[0]}"
-
-                        if person not in people:
-                            people.append(person)
-
-        except Exception as e:
-            logger.warning(f"LinkedIn company page error: {e}")
-
-        return people
+        return data
 
     def _clean_text(self, text: str) -> str:
         """Clean extracted text by removing excess whitespace."""
-        # Replace multiple whitespace with single space
         text = re.sub(r'\s+', ' ', text)
-        # Remove leading/trailing whitespace
         text = text.strip()
         return text
 
-    def format_research_context(self, research: Dict[str, Any]) -> str:
-        """Format research data into a context string for the LLM."""
+    def format_research_context(self, research: Dict[str, Any], yc_data: Dict[str, Any] = None,
+                                relationship_data: Dict[str, Any] = None) -> str:
+        """Format research data into a comprehensive context string for the LLM.
+
+        Args:
+            research: Research data from deep web crawling
+            yc_data: Optional YC company data from Bookface (posts, founders)
+            relationship_data: Optional relationship data from forwarded emails (timeline, contacts, etc.)
+        """
         parts = []
 
-        parts.append(f"=== RESEARCH DATA FOR {research['company']} ({research['domain']}) ===\n")
+        domain_str = research.get('domain') or 'no website'
+        source_str = research.get('source', '')
 
-        # Website data
-        if research['website']:
-            ws = research['website']
-            if ws.get('title'):
-                parts.append(f"Website Title: {ws['title']}")
-            if ws.get('meta_description'):
-                parts.append(f"Meta Description: {ws['meta_description']}")
-            if ws.get('homepage'):
-                parts.append(f"\n--- Homepage Content ---\n{ws['homepage'][:3000]}")
-            if ws.get('about'):
-                parts.append(f"\n--- About Page ---\n{ws['about'][:2000]}")
-            if ws.get('team'):
-                parts.append(f"\n--- Team Page ---\n{ws['team'][:2000]}")
+        header = f"=== COMPREHENSIVE RESEARCH DATA FOR {research['company']} ({domain_str}) ==="
+        if source_str:
+            header += f"\nSource: {source_str}"
+            if source_str.upper().startswith(('W', 'S')) and len(source_str) <= 4:
+                header += f" (Y Combinator batch)"
+        parts.append(header + "\n")
 
-        # Google results
-        if research['google_results']:
-            parts.append("\n--- Google Search Results ---")
-            for r in research['google_results'][:5]:
-                parts.append(f"- {r['title']}: {r['snippet'][:200]}")
+        # Add relationship data from forwarded emails (highest priority - personal context)
+        if relationship_data:
+            parts.append("\n=== RELATIONSHIP & EMAIL HISTORY (from forwarded emails) ===")
 
-        # LinkedIn people
-        if research['linkedin_people']:
-            parts.append("\n--- LinkedIn Profiles (Founders/Executives) ---")
-            for p in research['linkedin_people']:
-                profile_info = f"- {p['name']}"
-                if p['title']:
-                    profile_info += f" - {p['title']}"
-                if p['linkedin_url']:
-                    profile_info += f" ({p['linkedin_url']})"
-                parts.append(profile_info)
+            if relationship_data.get('introducer'):
+                intro = relationship_data['introducer']
+                parts.append(f"\n**Introducer:** {intro.get('name', 'Unknown')}")
+                if intro.get('email'):
+                    parts.append(f"  Email: {intro['email']}")
+                if intro.get('context'):
+                    parts.append(f"  Context: {intro['context']}")
 
-        if research['errors']:
-            parts.append(f"\n--- Research Errors ---\n{'; '.join(research['errors'])}")
+            if relationship_data.get('contacts'):
+                parts.append("\n**Key Contacts:**")
+                for contact in relationship_data['contacts']:
+                    contact_info = f"- {contact.get('name', 'Unknown')}"
+                    if contact.get('email'):
+                        contact_info += f" ({contact['email']})"
+                    if contact.get('role'):
+                        contact_info += f" - {contact['role']}"
+                    parts.append(contact_info)
+
+            if relationship_data.get('summary'):
+                parts.append(f"\n**Relationship Summary:**\n{relationship_data['summary']}")
+
+            if relationship_data.get('timeline'):
+                parts.append("\n**Communication Timeline:**")
+                for event in relationship_data['timeline'][:10]:  # Limit to 10 events
+                    parts.append(f"- [{event.get('date', 'Unknown date')}] {event.get('event', '')}")
+
+            if relationship_data.get('key_topics'):
+                parts.append(f"\n**Key Topics Discussed:** {', '.join(relationship_data['key_topics'])}")
+
+            if relationship_data.get('next_steps'):
+                parts.append(f"\n**Next Steps:** {relationship_data['next_steps']}")
+
+            # Include raw email content if available (very valuable context)
+            if relationship_data.get('raw_messages'):
+                parts.append("\n**Email Thread Content:**")
+                for i, msg in enumerate(relationship_data['raw_messages'][:5]):  # Limit to 5 messages
+                    parts.append(f"\n--- Email {i+1} ---")
+                    if msg.get('from'):
+                        parts.append(f"From: {msg['from']}")
+                    if msg.get('date'):
+                        parts.append(f"Date: {msg['date']}")
+                    if msg.get('subject'):
+                        parts.append(f"Subject: {msg['subject']}")
+                    if msg.get('body'):
+                        parts.append(msg['body'][:2000])
+
+        # Add YC Bookface data if available (high quality founder-written content)
+        if yc_data:
+            if yc_data.get('founders'):
+                parts.append("\n=== YC FOUNDERS (from Bookface) ===")
+                for founder in yc_data['founders']:
+                    founder_info = f"- {founder.get('name', 'Unknown')}"
+                    if founder.get('email'):
+                        founder_info += f" ({founder['email']})"
+                    parts.append(founder_info)
+
+            if yc_data.get('posts'):
+                parts.append("\n=== YC BOOKFACE POSTS (founder-written content) ===")
+                for i, post in enumerate(yc_data['posts'][:5]):
+                    if post.get('title'):
+                        parts.append(f"\n**Post {i+1}: {post['title']}**")
+                    if post.get('author'):
+                        parts.append(f"Author: {post['author']}")
+                    if post.get('body'):
+                        parts.append(post['body'][:2000])
+
+        # Domain pages (crawled from company website)
+        domain_pages = research.get('domain_pages', {})
+        if domain_pages:
+            parts.append(f"\n=== COMPANY WEBSITE CONTENT ({len(domain_pages)} pages crawled) ===")
+            for url, page_data in list(domain_pages.items())[:10]:  # Limit to 10 pages in context
+                parts.append(f"\n--- Page: {url} ---")
+                if page_data.get('title'):
+                    parts.append(f"Title: {page_data['title']}")
+                if page_data.get('meta_description'):
+                    parts.append(f"Description: {page_data['meta_description']}")
+                if page_data.get('content'):
+                    parts.append(page_data['content'][:3000])
+
+        # Search results summaries
+        search_results = research.get('search_results', [])
+        if search_results:
+            parts.append(f"\n=== SEARCH RESULTS ({len(search_results)} found) ===")
+            for r in search_results[:15]:
+                snippet = r.get('snippet', '')[:300]
+                parts.append(f"- [{r.get('title', 'No title')}]({r.get('url', '')}): {snippet}")
+
+        # External content (scraped from search result pages)
+        external_content = research.get('external_content', {})
+        if external_content:
+            parts.append(f"\n=== EXTERNAL SOURCES ({len(external_content)} pages scraped) ===")
+            for url, content_data in list(external_content.items())[:8]:
+                parts.append(f"\n--- Source: {url} ---")
+                if content_data.get('title'):
+                    parts.append(f"Title: {content_data['title']}")
+                if content_data.get('content'):
+                    parts.append(content_data['content'][:3000])
+
+        # Crunchbase data
+        crunchbase = research.get('crunchbase', {})
+        if crunchbase and crunchbase.get('content'):
+            parts.append("\n=== CRUNCHBASE DATA ===")
+            parts.append(crunchbase['content'][:4000])
+
+        # YC Directory data
+        yc_directory = research.get('yc_data', {})
+        if yc_directory and yc_directory.get('content'):
+            parts.append("\n=== Y COMBINATOR DIRECTORY ===")
+            parts.append(yc_directory['content'][:4000])
+
+        # Summary stats
+        total_pages = len(domain_pages) + len(external_content)
+        total_results = len(search_results)
+        parts.append(f"\n=== RESEARCH SUMMARY ===")
+        parts.append(f"Total pages crawled: {total_pages}")
+        parts.append(f"Search results found: {total_results}")
+
+        if research.get('errors'):
+            parts.append(f"\nResearch errors: {'; '.join(research['errors'])}")
 
         return '\n'.join(parts)
+
+
+class BookfaceService:
+    """Service for scraping YC Bookface for batch companies."""
+
+    BASE_FEED_URL = 'https://bookface.ycombinator.com/feed-v2.json'
+    DEFAULT_PARAMS = 'feed=recent&filter_posts=false&omit_channels=false&comment_post_score_mode=off'
+
+    # Rate limiting and pagination settings
+    MAX_PAGES = 3  # Maximum pages to fetch per scrape
+    RATE_LIMIT_SECONDS = 2  # Seconds to wait between requests
+
+    def __init__(self, cookie: str):
+        """Initialize with Bookface session cookie."""
+        self.cookie = cookie
+
+    def fetch_feed_page(self, cursor: Optional[str] = None) -> Dict[str, Any]:
+        """Fetch a single page of the Bookface feed.
+
+        Args:
+            cursor: Pagination cursor for next page (None for first page)
+
+        Returns:
+            Feed JSON response
+        """
+        import urllib.request
+        import time
+
+        url = f"{self.BASE_FEED_URL}?{self.DEFAULT_PARAMS}"
+        if cursor:
+            url += f"&cursor={cursor}"
+
+        req = urllib.request.Request(url)
+        req.add_header('accept', 'application/json')
+        req.add_header('content-type', 'application/json')
+        req.add_header('cookie', self.cookie)
+        req.add_header('user-agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36')
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.loads(response.read().decode('utf-8'))
+        except Exception as e:
+            logger.error(f"Error fetching Bookface feed: {e}")
+            raise
+
+    def extract_batch_companies(self, batch: str = 'W26', max_pages: int = None) -> List[Dict[str, str]]:
+        """Extract companies from a specific YC batch, paginating through the feed.
+
+        Args:
+            batch: The batch identifier, e.g., 'W26', 'S25'
+            max_pages: Maximum pages to fetch (defaults to MAX_PAGES)
+
+        Returns:
+            List of dicts with 'id', 'name', and 'batch' keys
+        """
+        import time
+
+        if max_pages is None:
+            max_pages = self.MAX_PAGES
+
+        companies = {}  # Use dict to deduplicate by company ID
+        cursor = None
+        pages_fetched = 0
+
+        while pages_fetched < max_pages:
+            # Rate limiting - wait before fetching (except for first page)
+            if pages_fetched > 0:
+                logger.info(f"Rate limiting: waiting {self.RATE_LIMIT_SECONDS}s before next request")
+                time.sleep(self.RATE_LIMIT_SECONDS)
+
+            logger.info(f"Fetching page {pages_fetched + 1}/{max_pages}" +
+                       (f" (cursor: {cursor[:20]}...)" if cursor else ""))
+
+            feed = self.fetch_feed_page(cursor)
+            posts = feed.get('posts', [])
+
+            if not posts:
+                logger.info("No more posts, stopping pagination")
+                break
+
+            # Extract companies from this page
+            for post in posts:
+                user = post.get('user', {})
+                user_companies = user.get('companies', [])
+                post_body = post.get('body', '') or post.get('body_v2', '')
+                post_title = post.get('title', '')
+
+                for company in user_companies:
+                    company_batch = company.get('batch', '')
+                    if company_batch == batch:
+                        company_id = company.get('id')
+                        if company_id and company_id not in companies:
+                            companies[company_id] = {
+                                'id': company_id,
+                                'name': company.get('name', ''),
+                                'batch': company_batch,
+                                'posts': [],
+                                'founders': []
+                            }
+
+                        # Add post content to company
+                        if company_id and post_body:
+                            companies[company_id]['posts'].append({
+                                'title': post_title,
+                                'body': post_body[:5000],  # Limit size
+                                'author': user.get('full_name', ''),
+                                'author_email': user.get('email', '')
+                            })
+
+                        # Add founder info
+                        if company_id and user.get('full_name'):
+                            founder_info = {
+                                'name': user.get('full_name', ''),
+                                'email': user.get('email', ''),
+                                'hnid': user.get('hnid', '')
+                            }
+                            if founder_info not in companies[company_id]['founders']:
+                                companies[company_id]['founders'].append(founder_info)
+
+            pages_fetched += 1
+
+            # Check for next page
+            cursor = feed.get('next_cursor')
+            if not cursor:
+                logger.info("No next_cursor, reached end of feed")
+                break
+
+        logger.info(f"Found {len(companies)} unique {batch} companies across {pages_fetched} pages")
+        return list(companies.values())
+
+    def scrape_and_add_companies(self, sheets_service, batch: str = 'W26',
+                                  max_pages: int = None, firestore_svc=None) -> Dict[str, Any]:
+        """Scrape Bookface for batch companies and add them to the sheet.
+
+        Args:
+            sheets_service: SheetsService instance
+            batch: The batch to scrape, e.g., 'W26'
+            max_pages: Maximum pages to fetch (defaults to MAX_PAGES)
+            firestore_svc: FirestoreService instance (optional) to store company data
+
+        Returns:
+            Dict with results: added, skipped, errors
+        """
+        try:
+            companies = self.extract_batch_companies(batch, max_pages=max_pages)
+
+            results = {
+                'added': [],
+                'skipped': [],
+                'errors': []
+            }
+
+            for company in companies:
+                name = company['name']
+                if not name:
+                    continue
+
+                result = sheets_service.add_company(
+                    company=name,
+                    domain='',  # Domain unknown from feed
+                    source=batch
+                )
+
+                if result.get('success'):
+                    results['added'].append(name)
+                elif 'already exists' in result.get('error', ''):
+                    results['skipped'].append(name)
+                else:
+                    results['errors'].append(f"{name}: {result.get('error')}")
+
+                # Store company data in Firestore (posts, founders) for memo enrichment
+                if firestore_svc and (company.get('posts') or company.get('founders')):
+                    try:
+                        self._store_yc_company_data(firestore_svc, company)
+                    except Exception as e:
+                        logger.warning(f"Failed to store YC data for {name}: {e}")
+
+            logger.info(f"Bookface scrape complete: {len(results['added'])} added, "
+                       f"{len(results['skipped'])} skipped, {len(results['errors'])} errors")
+
+            return {
+                'success': True,
+                'batch': batch,
+                'added': len(results['added']),
+                'skipped': len(results['skipped']),
+                'errors': len(results['errors']),
+                'added_companies': results['added'],
+                'error_details': results['errors']
+            }
+
+        except Exception as e:
+            logger.error(f"Error in Bookface scrape: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+    def _store_yc_company_data(self, firestore_svc, company: Dict[str, Any]):
+        """Store YC company data (posts, founders) in Firestore for memo enrichment."""
+        company_key = company['name'].lower().replace(' ', '-')
+        doc_ref = firestore_svc.db.collection('yc_companies').document(company_key)
+
+        # Get existing data to merge posts/founders
+        existing = doc_ref.get()
+        if existing.exists:
+            existing_data = existing.to_dict()
+            existing_posts = existing_data.get('posts', [])
+            existing_founders = existing_data.get('founders', [])
+
+            # Merge posts (avoid duplicates by title)
+            existing_titles = {p.get('title') for p in existing_posts}
+            for post in company.get('posts', []):
+                if post.get('title') not in existing_titles:
+                    existing_posts.append(post)
+
+            # Merge founders (avoid duplicates by email)
+            existing_emails = {f.get('email') for f in existing_founders}
+            for founder in company.get('founders', []):
+                if founder.get('email') not in existing_emails:
+                    existing_founders.append(founder)
+
+            company['posts'] = existing_posts
+            company['founders'] = existing_founders
+
+        doc_ref.set({
+            'name': company['name'],
+            'batch': company.get('batch', ''),
+            'posts': company.get('posts', []),
+            'founders': company.get('founders', []),
+            'updated_at': firestore.SERVER_TIMESTAMP
+        })
+
+        logger.info(f"Stored YC data for {company['name']}: {len(company.get('posts', []))} posts, {len(company.get('founders', []))} founders")
 
 
 class GeminiService:
@@ -604,104 +1347,77 @@ IMPORTANT: Use the following research data to write an accurate memo. This is re
 
 """
 
-            prompt = f"""You are a senior venture capital analyst at a top-tier firm. Write a comprehensive investment memo for the company below in the style of Sequoia Capital and Chamath Palihapitiya's Social Capital memos.
+            prompt = f"""You are a research analyst. Compile a factual research brief on the company below. Do NOT provide opinions, assessments, or recommendations. Only include verified facts.
 
 Company: {company}
-Website: {domain}
+Website: {domain if domain and domain != 'Unknown' else 'Not provided'}
 {context_section}
-Write a detailed, analytically rigorous investment memo with the following structure:
+IMPORTANT: If the research data above is limited or empty, use your training knowledge about this company to fill in factual information. Many companies have public information available - use what you know. Only state "Not found" if you genuinely have no information about a topic.
 
-# {company} — Investment Memo
+Create a factual research brief with the following structure:
 
-## Investment Thesis
-A compelling 2-3 sentence summary of why this company could be a category-defining investment. Be specific about the opportunity and conviction level.
+# {company} — Research Brief
 
 ## Company Overview
-- **What they do:** Clear, jargon-free explanation of the product/service
-- **Founded:** Year and location (if findable)
-- **Stage:** Estimated company stage (Pre-seed, Seed, Series A, etc.)
+- **What they do:** Clear, factual description of the product/service
+- **Website:** {domain}
+- **Founded:** Year and location (only if found in research)
+- **Headquarters:** Location (only if found in research)
+- **Company size:** Employee count or range (only if found in research)
 
-## The Problem
-What specific pain point does this company address? Describe:
-- The customer's current frustration or unmet need
-- How this problem is solved today (status quo)
-- Why existing solutions fall short
-
-## The Solution
-- How the product works and why it's differentiated
-- Key features and unique value proposition
-- Any proprietary technology, data moats, or IP
-
-## Why Now?
-What macro trends, technological shifts, or market changes make this the right moment? Consider:
-- Technology enablers (AI, cloud, mobile, etc.)
-- Regulatory or behavioral shifts
-- Market timing and urgency
-
-## Market Opportunity
-- **TAM (Total Addressable Market):** The entire market if they captured 100%
-- **SAM (Serviceable Addressable Market):** The realistic target segment
-- **SOM (Serviceable Obtainable Market):** What they can capture in 3-5 years
-- Growth rate and trajectory of the market
-
-## Competitive Landscape
-| Competitor | Strengths | Weaknesses |
-|------------|-----------|------------|
-| [Competitor 1] | ... | ... |
-| [Competitor 2] | ... | ... |
-
-**Differentiation:** Why {company} wins against these alternatives.
-
-## Business Model
-- How they make money (SaaS, marketplace, transactional, etc.)
-- Pricing strategy and unit economics (if estimable)
-- Path to profitability
-
-## Team
+## Founders & Team
 For each founder/key executive found in the research data:
-- **[Name]** - [Title] - [Brief background and relevant experience]
-  - LinkedIn: [Include LinkedIn URL if provided in research data]
-- Why this team is uniquely positioned to win
-- Any notable advisors or investors (if known)
+- **[Name]** - [Title]
+  - Background: [Education, previous companies, roles - only verified facts]
+  - LinkedIn: [Include URL if provided in research data]
 
-IMPORTANT: If LinkedIn profiles were provided in the research data, you MUST include the LinkedIn URLs for each founder/executive.
+List only people confirmed in the research data. Do not invent team members.
+
+## Product & Service
+- Factual description of what the product does
+- Key features mentioned on website or in articles
+- Target customers/users (if stated)
+- Pricing information (if publicly available)
 
 ## Traction & Metrics
-What evidence exists of product-market fit?
-- Users, customers, or revenue (if public)
-- Growth indicators
-- Notable customers or partnerships
+Only include metrics that are explicitly stated in the research:
+- User counts, customer numbers, or revenue figures
+- Growth statistics
+- Named customers or partnerships
+- Funding raised (amount, date, investors)
 
-## Risks & Concerns
-Be intellectually honest about the challenges:
-1. **[Risk Category]:** Description and potential mitigation
-2. **[Risk Category]:** Description and potential mitigation
-3. **[Risk Category]:** Description and potential mitigation
+If no traction data is available, state "No public traction data found."
 
-## Due Diligence Questions
-Key questions to answer before investing:
-- [ ] Question about team/founders
-- [ ] Question about market/competition
-- [ ] Question about technology/product
-- [ ] Question about business model/unit economics
-- [ ] Question about fundraising/runway
+## Online Presence & Discussion
+- Social media following (if found)
+- Press coverage or articles (list sources)
+- Product Hunt, Reddit, Hacker News, or forum discussions
+- App store ratings/reviews (if applicable)
 
-## Investment Recommendation
-**Recommendation:** [STRONG PASS / PASS / WORTH MONITORING / MEET / STRONG CONVICTION]
+## Background & Context
+- Company history and timeline
+- Notable news or announcements
+- Industry or sector classification
+- Any publicly stated company mission or vision
 
-Provide a clear, direct recommendation with 2-3 sentences of rationale. If recommending to meet or invest, specify what would increase conviction.
+## Additional Information
+- Known investors or advisors
+- Notable partnerships or integrations
+- Awards or recognition
+- Any other relevant factual information
 
 ---
 
 CRITICAL INSTRUCTIONS:
-- Output ONLY the memo content. Do NOT include any preamble, introduction, or conversational text like "Okay, let's analyze..." or "Here's the memo..."
-- Start directly with the memo title: # {company} — Investment Memo
-- Write in a crisp, analytical VC style
-- IMPORTANT: Base your analysis ONLY on the research data provided above. Do not make up facts or confuse this company with another company with a similar name.
-- Include LinkedIn profile URLs for founders/executives if provided in the research data
-- Be specific with data where possible
-- Acknowledge uncertainty rather than fabricating details - if information is not available, say "Information not available" rather than guessing
-- Use markdown formatting with headers, bullet points, bold text, and tables"""
+- Output ONLY facts. Do NOT provide opinions, analysis, or recommendations.
+- Do NOT discuss market size, TAM, or growth potential.
+- Do NOT assess the company's prospects or give investment advice.
+- Use the research data above FIRST, then supplement with your training knowledge about the company.
+- Only state "Not found" if you have NO information from either source.
+- Start directly with: # {company} — Research Brief
+- Include LinkedIn URLs for founders when available.
+- Use markdown formatting with headers, bullet points, and bold text.
+- Cite sources where helpful (e.g., "According to TechCrunch...")."""
 
         try:
             response = self.model.generate_content(
@@ -728,8 +1444,37 @@ class DocsService:
         self.service = build('docs', 'v1', credentials=credentials)
 
     def insert_text(self, doc_id: str, content: str):
-        """Insert markdown content into a Google Doc with proper formatting."""
+        """Insert markdown content into a Google Doc with proper formatting.
+
+        Clears existing content before inserting new content.
+        """
         try:
+            # First, clear existing content from the document
+            doc = self.service.documents().get(documentId=doc_id).execute()
+            doc_content = doc.get('body', {}).get('content', [])
+
+            # Find the end index of existing content
+            end_index = 1
+            for element in doc_content:
+                if 'endIndex' in element:
+                    end_index = max(end_index, element['endIndex'])
+
+            # Delete existing content if there is any (leave index 1 which is required)
+            if end_index > 2:
+                delete_request = [{
+                    'deleteContentRange': {
+                        'range': {
+                            'startIndex': 1,
+                            'endIndex': end_index - 1
+                        }
+                    }
+                }]
+                self.service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={'requests': delete_request}
+                ).execute()
+                logger.info(f"Cleared existing content from document {doc_id}")
+
             # Parse markdown and convert to Google Docs format
             lines = content.split('\n')
             requests = []
@@ -842,11 +1587,17 @@ class EmailAgentService:
         'ADD_COMPANY': {
             'description': 'Add a new company to the deal flow spreadsheet. Extract company name and domain from the email.'
         },
+        'UPDATE_COMPANY': {
+            'description': 'Update/correct a company\'s domain or name. Use when someone provides a correction like "Domain is X" or "Actually the domain is X" or "Correct domain: X".'
+        },
         'REGENERATE_MEMO': {
-            'description': 'Regenerate an investment memo for a specific company. Use when a memo needs to be redone. Extract the domain from the email.'
+            'description': 'Regenerate an investment memo for a specific company. Use when a memo needs to be redone. Extract the domain OR company name from the email.'
         },
         'ANALYZE_THREAD': {
             'description': 'Analyze a forwarded email thread to create a relationship timeline and summary. Use when email contains forwarded messages (look for "Forwarded message", "From:", date patterns, or quoted content).'
+        },
+        'SCRAPE_YC': {
+            'description': 'Scrape YC Bookface for companies in a specific batch and add them to the sheet. Default batch is W26.'
         },
         'HEALTH_CHECK': {
             'description': 'Check if the service is running properly'
@@ -896,44 +1647,69 @@ Email:
 From: {email_data.get('from', 'Unknown')}
 Subject: {email_data.get('subject', 'No subject')}
 Body:
-{email_data.get('body', '')[:2000]}
+{email_data.get('body', '')[:3000]}
 
-Analyze this email and decide what action to take. Respond with JSON only (no markdown):
+CRITICAL: Analyze the ENTIRE email thread carefully. The email may contain:
+1. Previous Keel responses (marked with ✓, **Company:**, **Domain:**, etc.)
+2. User replies that CORRECT or UPDATE information
+3. New commands to execute
+
+Respond with JSON only (no markdown):
 {{
   "action": "ACTION_NAME",
-  "reasoning": "Brief explanation in a friendly tone",
-  "parameters": {{}}
+  "reasoning": "Brief explanation",
+  "parameters": {{}},
+  "also_do": null  // Optional: second action to perform after the first
 }}
 
-IMPORTANT for ADD_COMPANY:
-- If the email contains a company name and/or website URL, use ADD_COMPANY
-- Extract the company name and domain from the email content
-- Parameters must include: {{"company": "Company Name", "domain": "example.com"}}
-- Clean the domain: remove https://, www., and any paths
-- If only a URL is provided, infer the company name from the domain
+**HIGHEST PRIORITY - DETECTING CORRECTIONS:**
+If the user provides a correction or update to information Keel previously processed, you MUST use UPDATE_COMPANY.
 
-Examples:
-- "Add Acme Corp acme.com" → ADD_COMPANY with {{"company": "Acme Corp", "domain": "acme.com"}}
-- "stripe.com" → ADD_COMPANY with {{"company": "Stripe", "domain": "stripe.com"}}
-- "run memos" or "generate" → GENERATE_MEMOS
-- "regenerate memo for acme.com" or "redo acme.com" → REGENERATE_MEMO with {{"domain": "acme.com"}}
-- "status" or "health" → HEALTH_CHECK
-- Forwarded email thread with multiple messages → ANALYZE_THREAD
+Correction patterns to look for:
+- "Domain is https://..." or "Domain: https://..."
+- "Actually the domain is..." or "Correct domain is..."
+- "The website is..." or "Their site is..."
+- "It should be..." or "Change it to..."
+- A URL appearing right after Keel's "Company added" or "Domain:" response
+- User typing a URL that differs from what Keel reported
 
-IMPORTANT for REGENERATE_MEMO:
-- Use when someone wants to redo/regenerate/retry a memo for a specific company
-- Extract the domain from the email
-- Parameters must include: {{"domain": "example.com"}}
+Example correction scenario:
+```
+Keel: ✓ Company added! Company: HCA, Domain: hca.com
+User: Domain is https://www.hcahealthcare.com/
+      Generate memos
+```
+This should be: UPDATE_COMPANY with {{"company": "HCA", "new_domain": "hcahealthcare.com"}}, also_do: GENERATE_MEMOS
 
-IMPORTANT for ANALYZE_THREAD:
-- Use when the email contains a FORWARDED email thread (multiple messages)
-- Look for patterns like: "---------- Forwarded message ---------", "From:", "Date:", "Subject:" repeated
-- Look for "On [date] [person] wrote:" patterns
-- Look for the subject starting with "Fwd:" or "Fw:"
-- The goal is to create a timeline and relationship summary from the email history
-- No parameters needed - the entire email body will be analyzed
+**UPDATE_COMPANY:**
+- Use when correcting/updating a company's domain or name
+- Parameters: {{"company": "Company Name", "new_domain": "correct.com"}}
+- Can include "also_do" for a follow-up action like GENERATE_MEMOS
 
-Be helpful and assume good intent."""
+**ADD_COMPANY:**
+- Use ONLY for adding NEW companies (not corrections)
+- Parameters: {{"company": "Company Name", "domain": "example.com"}}
+
+**GENERATE_MEMOS:**
+- Use for: "run memos", "generate", "generate memos", "process"
+- Parameters: {{"force": false}} (default) or {{"force": true}} for regenerating all
+
+**REGENERATE_MEMO:**
+- Use for: "regenerate memo for X", "redo X", "retry X"
+- Parameters: {{"domain": "example.com"}} or {{"domain": "Company Name"}}
+
+**ANALYZE_THREAD:**
+- Use for FORWARDED email threads (look for "Forwarded message", multiple From:/Date: headers)
+- No parameters needed
+
+**SCRAPE_YC:**
+- Use for: "scrape YC", "import YC batch", "get W26 companies"
+- Parameters: {{"batch": "W26", "pages": 3}}
+
+**HEALTH_CHECK:**
+- Use for: "status", "health", "check"
+
+Be helpful. When in doubt about whether something is a correction vs new addition, check if Keel previously mentioned that company in the thread."""
 
         try:
             response = self.model.generate_content(
@@ -966,22 +1742,37 @@ Be helpful and assume good intent."""
         """Execute the decided action."""
         action = decision.get('action', 'NONE')
         parameters = decision.get('parameters', {})
+        also_do = decision.get('also_do')
+
+        result = None
 
         if action == 'GENERATE_MEMOS':
-            return self._run_memo_generation(services)
+            force = parameters.get('force', False)
+            result = self._run_memo_generation(services, force=force)
 
         elif action == 'ADD_COMPANY':
             company = parameters.get('company', '')
             domain = parameters.get('domain', '')
-            if not company or not domain:
+            if not company and not domain:
                 return {'success': False, 'error': 'Missing company name or domain'}
-            return services['sheets'].add_company(company, domain)
+            # Allow adding company without domain (for YC companies)
+            result = services['sheets'].add_company(company, domain)
+
+        elif action == 'UPDATE_COMPANY':
+            company = parameters.get('company', '')
+            new_domain = parameters.get('new_domain', '') or parameters.get('domain', '')
+            new_name = parameters.get('new_name', '')
+            if not company:
+                return {'success': False, 'error': 'Missing company name to update'}
+            if not new_domain and not new_name:
+                return {'success': False, 'error': 'Missing new domain or name to update'}
+            result = services['sheets'].update_company(company, new_domain=new_domain, new_name=new_name)
 
         elif action == 'REGENERATE_MEMO':
-            domain = parameters.get('domain', '')
-            if not domain:
-                return {'success': False, 'error': 'Missing domain to regenerate'}
-            return self._regenerate_memo(domain, services)
+            identifier = parameters.get('domain', '') or parameters.get('company', '')
+            if not identifier:
+                return {'success': False, 'error': 'Missing domain or company name to regenerate'}
+            result = self._regenerate_memo(identifier, services)
 
         elif action == 'ANALYZE_THREAD':
             if not email_data:
@@ -989,16 +1780,47 @@ Be helpful and assume good intent."""
             email_body = email_data.get('body', '')
             if not email_body:
                 return {'success': False, 'error': 'No email body to analyze'}
-            return self._analyze_thread(email_body, services)
+            result = self._analyze_thread(email_body, services)
+
+        elif action == 'SCRAPE_YC':
+            batch = parameters.get('batch', 'W26')
+            max_pages = parameters.get('pages', None)  # None = use default
+            if max_pages is not None:
+                max_pages = min(int(max_pages), 5)  # Cap at 5 pages max
+            result = self._scrape_yc_batch(batch, services, max_pages=max_pages)
 
         elif action == 'HEALTH_CHECK':
-            return {'success': True, 'status': 'healthy', 'message': 'All systems operational'}
+            result = {'success': True, 'status': 'healthy', 'message': 'All systems operational'}
 
         else:
             return {'success': False, 'skipped': True}
 
-    def _run_memo_generation(self, services: Dict) -> Dict[str, Any]:
-        """Run the memo generation process."""
+        # Handle chained action (also_do)
+        if also_do and result and result.get('success'):
+            logger.info(f"Executing chained action: {also_do}")
+            chained_decision = {'action': also_do, 'parameters': {}}
+
+            # If we just updated a company and need to generate memo, use the updated company
+            if also_do == 'GENERATE_MEMOS':
+                chained_result = self._run_memo_generation(services, force=False)
+            elif also_do == 'REGENERATE_MEMO' and result.get('company'):
+                chained_result = self._regenerate_memo(result['company'], services)
+            else:
+                chained_result = self._execute_action(chained_decision, services, email_data)
+
+            # Combine results
+            result['chained_action'] = also_do
+            result['chained_result'] = chained_result
+
+        return result
+
+    def _run_memo_generation(self, services: Dict, force: bool = False) -> Dict[str, Any]:
+        """Run the memo generation process.
+
+        Args:
+            services: Dict of service instances
+            force: If True, regenerate memos for ALL companies (even already processed)
+        """
         try:
             sheets = services['sheets']
             firestore_svc = services['firestore']
@@ -1006,7 +1828,11 @@ Be helpful and assume good intent."""
             gemini = services['gemini']
             docs = services['docs']
 
-            rows = sheets.get_rows_to_process()
+            if force:
+                # Get ALL companies from sheet (not just unprocessed)
+                rows = sheets.get_all_companies()
+            else:
+                rows = sheets.get_rows_to_process()
 
             if not rows:
                 return {
@@ -1014,11 +1840,19 @@ Be helpful and assume good intent."""
                     'processed': 0,
                     'skipped': 0,
                     'errors': 0,
-                    'message': 'No new companies to process'
+                    'message': 'No companies to process'
                 }
 
             results = []
             for row in rows:
+                # Use company name as key if no domain
+                key = row.get('domain') or row.get('company', '').lower().replace(' ', '-')
+                if not key:
+                    continue
+
+                if force:
+                    # Clear processed record so it will be regenerated
+                    firestore_svc.clear_processed(key)
                 result = self._process_single_company(row, sheets, firestore_svc, drive, gemini, docs)
                 results.append(result)
 
@@ -1038,8 +1872,8 @@ Be helpful and assume good intent."""
             logger.error(f"Error in memo generation: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
-    def _regenerate_memo(self, domain: str, services: Dict) -> Dict[str, Any]:
-        """Regenerate a memo for a specific domain."""
+    def _regenerate_memo(self, identifier: str, services: Dict) -> Dict[str, Any]:
+        """Regenerate a memo for a specific company (by domain or company name)."""
         try:
             sheets = services['sheets']
             firestore_svc = services['firestore']
@@ -1047,54 +1881,83 @@ Be helpful and assume good intent."""
             gemini = services['gemini']
             docs = services['docs']
 
-            # Clean up domain
-            clean_domain = domain.lower().strip()
-            clean_domain = re.sub(r'^https?://', '', clean_domain)
-            clean_domain = re.sub(r'^www\.', '', clean_domain)
-            clean_domain = re.sub(r'/.*$', '', clean_domain)
+            # Clean up identifier (could be domain or company name)
+            clean_id = identifier.lower().strip()
+            clean_id = re.sub(r'^https?://', '', clean_id)
+            clean_id = re.sub(r'^www\.', '', clean_id)
+            clean_id = re.sub(r'/.*$', '', clean_id)
 
-            # Find the company in the sheet
+            # Find the company in the sheet - try by domain first, then by name
             result = sheets.service.spreadsheets().values().get(
                 spreadsheetId=sheets.spreadsheet_id,
-                range='Index!A:C'
+                range='Index!A:D'
             ).execute()
 
             values = result.get('values', [])
             company = None
+            clean_domain = None
             row_number = None
+            source = ''
 
+            # First pass: try to match by domain
             for i, row in enumerate(values[1:], start=2):
-                if len(row) > 1:
+                if len(row) > 1 and row[1].strip():
                     existing_domain = row[1].lower().strip()
-                    if existing_domain == clean_domain:
+                    if existing_domain == clean_id:
                         company = row[0]
+                        clean_domain = existing_domain
                         row_number = i
+                        source = row[3].strip() if len(row) > 3 else ''
                         break
+
+            # Second pass: try to match by company name (if no domain match)
+            if not company:
+                for i, row in enumerate(values[1:], start=2):
+                    if len(row) > 0:
+                        existing_name = row[0].lower().strip()
+                        if existing_name == clean_id or existing_name == clean_id.replace('.com', '').replace('.io', '').replace('.ai', ''):
+                            company = row[0]
+                            clean_domain = row[1].strip() if len(row) > 1 else ''
+                            row_number = i
+                            source = row[3].strip() if len(row) > 3 else ''
+                            break
 
             if not company:
                 return {
                     'success': False,
-                    'error': f"Company with domain {clean_domain} not found in the sheet"
+                    'error': f"Company '{identifier}' not found in the sheet (searched by domain and name)"
                 }
 
+            # Use company name as key if no domain
+            firestore_key = clean_domain if clean_domain else company.lower().replace(' ', '-')
+            folder_domain = clean_domain if clean_domain else 'no-domain'
+
             # Clear the processed record
-            firestore_svc.clear_processed(clean_domain)
+            firestore_svc.clear_processed(firestore_key)
 
             # Create new folder and document (reuses existing folder if found)
-            folder_id = drive.create_folder(company, clean_domain)
+            folder_id = drive.create_folder(company, folder_domain)
             doc_id = drive.create_document(folder_id, company)
 
-            # Research the company
+            # Get stored YC company data if available
+            yc_data = firestore_svc.get_yc_company_data(company)
+
+            # Get relationship data from forwarded emails
+            relationship_data = firestore_svc.get_relationship_data(domain=clean_domain, company_name=company)
+
+            # Research the company (pass source for YC-enhanced search)
             research_svc = ResearchService()
-            research = research_svc.research_company(company, clean_domain)
-            research_context = research_svc.format_research_context(research)
+            research = research_svc.research_company(company, clean_domain, source=source)
+            research_context = research_svc.format_research_context(
+                research, yc_data=yc_data, relationship_data=relationship_data
+            )
 
             # Generate new memo with research context
-            memo_content = gemini.generate_memo(company, clean_domain, research_context=research_context)
+            memo_content = gemini.generate_memo(company, clean_domain or 'Unknown', research_context=research_context)
             docs.insert_text(doc_id, memo_content)
 
             # Mark as processed again
-            firestore_svc.mark_processed(clean_domain, company, doc_id, folder_id)
+            firestore_svc.mark_processed(firestore_key, company, doc_id, folder_id)
 
             # Update sheet status
             try:
@@ -1102,7 +1965,7 @@ Be helpful and assume good intent."""
             except Exception:
                 pass
 
-            logger.info(f"Regenerated memo for {company} ({clean_domain})")
+            logger.info(f"Regenerated memo for {company} ({clean_domain or 'no domain'})")
 
             return {
                 'success': True,
@@ -1116,47 +1979,82 @@ Be helpful and assume good intent."""
             return {'success': False, 'error': str(e)}
 
     def _analyze_thread(self, email_body: str, services: Dict) -> Dict[str, Any]:
-        """Analyze a forwarded email thread and create relationship timeline."""
+        """Analyze a forwarded email thread and create/update relationship timeline."""
         try:
+            sheets = services['sheets']
             firestore_svc = services['firestore']
             drive = services['drive']
             docs = services['docs']
 
             # Parse the email thread to extract individual messages
-            messages = self._parse_email_thread(email_body)
+            new_messages = self._parse_email_thread(email_body)
 
-            if not messages:
+            if not new_messages:
                 return {
                     'success': False,
                     'error': 'Could not parse any emails from the forwarded thread'
                 }
 
             # Extract domain from the email addresses
-            domain = self._extract_domain_from_messages(messages)
+            domain = self._extract_domain_from_messages(new_messages)
             if not domain:
                 return {
                     'success': False,
                     'error': 'Could not determine the domain from the email thread'
                 }
 
-            # Use Gemini to create timeline and summary
-            analysis = self._generate_relationship_analysis(messages, domain)
+            # Check if we have an existing relationship record
+            existing = self._get_relationship(firestore_svc, domain)
 
-            # Create a Google Doc with the analysis
-            folder_id = drive.parent_folder_id  # Use parent folder
-            doc_id = self._create_relationship_doc(drive, docs, domain, analysis)
+            if existing:
+                # Merge new messages with existing ones
+                existing_messages = existing.get('raw_messages', [])
+                all_messages = self._merge_messages(existing_messages, new_messages)
+                doc_id = existing.get('doc_id')
+                folder_id = existing.get('folder_id')
+                company_name = existing.get('company_name', domain)
+            else:
+                all_messages = new_messages
+                doc_id = None
+                folder_id = None
+                company_name = None
 
-            # Store in Firestore under relationships collection
-            self._store_relationship(firestore_svc, domain, messages, analysis, doc_id)
+            # Use Gemini to create timeline and summary from ALL messages
+            analysis = self._generate_relationship_analysis(all_messages, domain)
 
-            logger.info(f"Analyzed thread for domain {domain}")
+            if not company_name:
+                company_name = analysis.get('company_name', domain)
+
+            # Find or create the company folder
+            if not folder_id:
+                folder_id = drive.find_existing_folder(company_name, domain)
+                if not folder_id:
+                    folder_id = drive.create_folder(company_name, domain)
+                    # Ensure company exists in Index sheet
+                    sheets.add_company(company_name, domain)
+
+            # Create or update the Timeline doc
+            if doc_id:
+                # Update existing doc by clearing and rewriting
+                doc_id = self._update_timeline_doc(docs, doc_id, company_name, analysis)
+            else:
+                doc_id = self._create_timeline_doc(drive, docs, folder_id, company_name, analysis)
+
+            # Store/update in Firestore
+            self._store_relationship(firestore_svc, domain, all_messages, analysis, doc_id, folder_id, company_name)
+
+            logger.info(f"Analyzed thread for domain {domain} ({len(all_messages)} total messages)")
 
             return {
                 'success': True,
                 'domain': domain,
-                'message_count': len(messages),
+                'company_name': company_name,
+                'message_count': len(all_messages),
+                'new_messages': len(new_messages),
+                'updated': existing is not None,
                 'doc_id': doc_id,
-                'summary': analysis.get('summary', '')
+                'summary': analysis.get('summary', ''),
+                'introducer': analysis.get('introducer', {})
             }
 
         except Exception as e:
@@ -1271,6 +2169,11 @@ EMAIL THREAD:
 Create a JSON response with:
 {{
   "company_name": "The company name (infer from domain or emails)",
+  "introducer": {{
+    "name": "Name of person who made the introduction (if identifiable)",
+    "email": "Their email address",
+    "context": "How/why they made the introduction (e.g., 'Mutual connection from Stanford', 'Met at TechCrunch Disrupt')"
+  }},
   "contacts": [
     {{"name": "Person Name", "email": "email@domain.com", "role": "Their role if mentioned"}}
   ],
@@ -1283,7 +2186,14 @@ Create a JSON response with:
   "next_steps": "Any obvious next steps or follow-ups needed"
 }}
 
-Be thorough in extracting the timeline. Include all significant touchpoints.
+IMPORTANT for introducer:
+- Look for the FIRST email in the thread - often the introduction
+- Look for phrases like "introducing you to", "wanted to connect you with", "meet [name]", "I'd like you to meet"
+- The introducer is usually CC'd or is the sender of the first email if it's an intro
+- If no clear introducer, set introducer to null
+
+Be thorough in extracting the timeline. Include ALL significant touchpoints.
+Sort timeline chronologically (oldest first).
 Respond with JSON only, no markdown."""
 
         try:
@@ -1316,37 +2226,64 @@ Respond with JSON only, no markdown."""
                 'next_steps': ''
             }
 
-    def _create_relationship_doc(self, drive, docs, domain: str, analysis: Dict[str, Any]) -> str:
-        """Create a Google Doc with the relationship analysis."""
-        company_name = analysis.get('company_name', domain)
+    def _get_relationship(self, firestore_svc, domain: str) -> Optional[Dict[str, Any]]:
+        """Get existing relationship data from Firestore."""
+        normalized = domain.lower().strip()
+        doc_ref = firestore_svc.db.collection('relationships').document(normalized)
+        doc = doc_ref.get()
+        if doc.exists:
+            return doc.to_dict()
+        return None
 
-        # Create document
-        doc_metadata = drive.service.files().create(
-            body={
-                'name': f"Relationship: {company_name}",
-                'mimeType': 'application/vnd.google-apps.document',
-                'parents': [drive.parent_folder_id]
-            },
-            supportsAllDrives=True,
-            fields='id'
-        ).execute()
+    def _merge_messages(self, existing: List[Dict], new: List[Dict]) -> List[Dict]:
+        """Merge new messages with existing ones, avoiding duplicates."""
+        # Create a set of existing message signatures for deduplication
+        existing_sigs = set()
+        for msg in existing:
+            sig = f"{msg.get('from', '')}|{msg.get('date', '')}|{msg.get('subject', '')}"
+            existing_sigs.add(sig)
 
-        doc_id = doc_metadata['id']
+        merged = list(existing)
+        for msg in new:
+            sig = f"{msg.get('from', '')}|{msg.get('date', '')}|{msg.get('subject', '')}"
+            if sig not in existing_sigs:
+                merged.append(msg)
+                existing_sigs.add(sig)
 
-        # Format the content
+        return merged
+
+    def _format_timeline_content(self, company_name: str, analysis: Dict[str, Any]) -> str:
+        """Format the timeline document content."""
+        # Introduction section
+        introducer = analysis.get('introducer') or {}
+        if introducer and introducer.get('name'):
+            intro_text = f"**{introducer.get('name', 'Unknown')}**"
+            if introducer.get('email'):
+                intro_text += f" ({introducer.get('email')})"
+            if introducer.get('context'):
+                intro_text += f"\n{introducer.get('context')}"
+        else:
+            intro_text = "No introducer identified"
+
+        # Contacts section
         contacts_text = "\n".join([
-            f"- {c.get('name', 'Unknown')} ({c.get('email', '')}) - {c.get('role', 'Unknown role')}"
+            f"- **{c.get('name', 'Unknown')}** ({c.get('email', '')}) - {c.get('role', 'Unknown role')}"
             for c in analysis.get('contacts', [])
         ]) or "No contacts identified"
 
+        # Timeline section
         timeline_text = "\n".join([
-            f"- {t.get('date', 'Unknown date')}: {t.get('event', '')}"
+            f"- **{t.get('date', 'Unknown date')}**: {t.get('event', '')}"
             for t in analysis.get('timeline', [])
         ]) or "No timeline events identified"
 
+        # Topics section
         topics_text = ", ".join(analysis.get('key_topics', [])) or "None identified"
 
-        content = f"""# Relationship Summary: {company_name}
+        content = f"""# Timeline: {company_name}
+
+## Introduction
+{intro_text}
 
 ## Contacts
 {contacts_text}
@@ -1366,21 +2303,76 @@ Respond with JSON only, no markdown."""
 ## Next Steps
 {analysis.get('next_steps', 'None identified')}
 """
+        return content
 
-        # Insert content
+    def _create_timeline_doc(self, drive, docs, folder_id: str, company_name: str,
+                            analysis: Dict[str, Any]) -> str:
+        """Create a new Timeline doc in the company folder."""
+        # Create document in the company folder
+        doc_metadata = drive.service.files().create(
+            body={
+                'name': 'Timeline',
+                'mimeType': 'application/vnd.google-apps.document',
+                'parents': [folder_id]
+            },
+            supportsAllDrives=True,
+            fields='id'
+        ).execute()
+
+        doc_id = doc_metadata['id']
+        content = self._format_timeline_content(company_name, analysis)
         docs.insert_text(doc_id, content)
 
+        logger.info(f"Created Timeline doc {doc_id} in folder {folder_id}")
         return doc_id
 
+    def _update_timeline_doc(self, docs, doc_id: str, company_name: str,
+                            analysis: Dict[str, Any]) -> str:
+        """Update an existing Timeline doc by clearing and rewriting content."""
+        try:
+            # Get the document to find current content length
+            doc = docs.service.documents().get(documentId=doc_id).execute()
+            content_end = doc.get('body', {}).get('content', [{}])[-1].get('endIndex', 1)
+
+            # Delete all content (except the implicit newline at index 1)
+            if content_end > 2:
+                requests = [{
+                    'deleteContentRange': {
+                        'range': {
+                            'startIndex': 1,
+                            'endIndex': content_end - 1
+                        }
+                    }
+                }]
+                docs.service.documents().batchUpdate(
+                    documentId=doc_id,
+                    body={'requests': requests}
+                ).execute()
+
+            # Insert new content
+            content = self._format_timeline_content(company_name, analysis)
+            docs.insert_text(doc_id, content)
+
+            logger.info(f"Updated Timeline doc {doc_id}")
+            return doc_id
+
+        except Exception as e:
+            logger.error(f"Error updating timeline doc: {e}", exc_info=True)
+            raise
+
     def _store_relationship(self, firestore_svc, domain: str, messages: List[Dict],
-                           analysis: Dict[str, Any], doc_id: str):
+                           analysis: Dict[str, Any], doc_id: str, folder_id: str,
+                           company_name: str):
         """Store relationship data in Firestore."""
         normalized = domain.lower().strip()
         doc_ref = firestore_svc.db.collection('relationships').document(normalized)
 
         doc_ref.set({
             'domain': domain,
-            'company_name': analysis.get('company_name', domain),
+            'company_name': company_name,
+            'folder_id': folder_id,
+            'doc_id': doc_id,
+            'introducer': analysis.get('introducer'),
             'contacts': analysis.get('contacts', []),
             'timeline': analysis.get('timeline', []),
             'summary': analysis.get('summary', ''),
@@ -1388,34 +2380,66 @@ Respond with JSON only, no markdown."""
             'sentiment': analysis.get('sentiment', 'neutral'),
             'next_steps': analysis.get('next_steps', ''),
             'message_count': len(messages),
-            'doc_id': doc_id,
+            'raw_messages': messages,  # Store raw messages for merging later
             'analyzed_at': firestore.SERVER_TIMESTAMP
         })
 
         logger.info(f"Stored relationship data for {domain}")
 
+    def _scrape_yc_batch(self, batch: str, services: Dict, max_pages: int = None) -> Dict[str, Any]:
+        """Scrape YC Bookface for companies in a batch and add to sheet."""
+        try:
+            if not config.bookface_cookie:
+                return {'success': False, 'error': 'Bookface cookie not configured'}
+
+            bookface = BookfaceService(config.bookface_cookie)
+            return bookface.scrape_and_add_companies(
+                services['sheets'],
+                batch,
+                max_pages=max_pages,
+                firestore_svc=services.get('firestore')
+            )
+
+        except Exception as e:
+            logger.error(f"Error scraping YC batch: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
     def _process_single_company(self, row: Dict, sheets, firestore_svc, drive, gemini, docs) -> Dict:
         """Process a single company row."""
         company = row['company']
-        domain = row['domain']
+        domain = row.get('domain', '')
         row_number = row['row_number']
+        source = row.get('source', '')  # e.g., 'W26' for YC batch
+
+        # Use company name as key if no domain
+        firestore_key = domain if domain else company.lower().replace(' ', '-')
 
         try:
-            if firestore_svc.is_processed(domain):
+            if firestore_svc.is_processed(firestore_key):
                 return {'company': company, 'domain': domain, 'status': 'skipped', 'reason': 'already_processed'}
 
-            folder_id = drive.create_folder(company, domain)
+            # Create folder - use company name if no domain
+            folder_name_domain = domain if domain else 'no-domain'
+            folder_id = drive.create_folder(company, folder_name_domain)
             doc_id = drive.create_document(folder_id, company)
 
-            # Research the company
+            # Get stored YC company data if available (from Bookface scraping)
+            yc_data = firestore_svc.get_yc_company_data(company)
+
+            # Get relationship data from forwarded emails
+            relationship_data = firestore_svc.get_relationship_data(domain=domain, company_name=company)
+
+            # Research the company - pass source for YC-enhanced search
             research_svc = ResearchService()
-            research = research_svc.research_company(company, domain)
-            research_context = research_svc.format_research_context(research)
+            research = research_svc.research_company(company, domain, source=source)
+            research_context = research_svc.format_research_context(
+                research, yc_data=yc_data, relationship_data=relationship_data
+            )
 
             # Generate memo with research context
-            memo_content = gemini.generate_memo(company, domain, research_context=research_context)
+            memo_content = gemini.generate_memo(company, domain or 'Unknown', research_context=research_context)
             docs.insert_text(doc_id, memo_content)
-            firestore_svc.mark_processed(domain, company, doc_id, folder_id)
+            firestore_svc.mark_processed(firestore_key, company, doc_id, folder_id)
 
             try:
                 sheets.update_status(row_number, "Memo Created")
@@ -1432,7 +2456,8 @@ Respond with JSON only, no markdown."""
         """Format the response text for email reply."""
         action = decision.get('action', 'NONE')
 
-        if result.get('skipped'):
+        # Check for explicit boolean True (not truthy numbers like skipped count)
+        if result.get('skipped') is True:
             actions_list = '\n'.join(
                 f"• {val['description']}"
                 for key, val in self.ACTIONS.items()
@@ -1461,9 +2486,38 @@ You might want to check the logs or try again."""
             return f"""✓ **Company added to deal flow!**
 
 **Company:** {result.get('company')}
-**Domain:** {result.get('domain')}
+**Domain:** {result.get('domain') or '(none)'}
 
 The memo will be generated on the next run. Reply "generate memos" to process it now."""
+
+        elif action == 'UPDATE_COMPANY':
+            updates_list = result.get('updates', [])
+            updates_str = '\n'.join(f"  - {u}" for u in updates_list) if updates_list else "  - No changes needed"
+
+            response = f"""✓ **Company updated!**
+
+**Company:** {result.get('company')}
+**Changes:**
+{updates_str}"""
+
+            # If there was a chained action, append its result
+            chained_result = result.get('chained_result')
+            if chained_result:
+                chained_action = result.get('chained_action', '')
+                if chained_action == 'GENERATE_MEMOS' and chained_result.get('success'):
+                    processed = chained_result.get('processed', 0)
+                    if processed > 0:
+                        response += f"\n\n✓ **Also processed {processed} memo(s)!**"
+                        if chained_result.get('results'):
+                            for r in chained_result['results']:
+                                if r.get('status') == 'success':
+                                    doc_url = f"https://docs.google.com/document/d/{r['doc_id']}/edit"
+                                    response += f"\n  → {r['company']}: {doc_url}"
+                elif chained_action == 'REGENERATE_MEMO' and chained_result.get('success'):
+                    doc_url = f"https://docs.google.com/document/d/{chained_result.get('doc_id')}/edit"
+                    response += f"\n\n✓ **Memo regenerated:** {doc_url}"
+
+            return response
 
         elif action == 'GENERATE_MEMOS':
             if result.get('processed', 0) == 0 and result.get('errors', 0) == 0:
@@ -1493,14 +2547,79 @@ Let me know if you need anything else."""
 
         elif action == 'REGENERATE_MEMO':
             doc_url = f"https://docs.google.com/document/d/{result.get('doc_id')}/edit"
+            domain_str = result.get('domain') or '(no domain)'
             return f"""✓ **Memo regenerated!**
 
 **Company:** {result.get('company')}
-**Domain:** {result.get('domain')}
+**Domain:** {domain_str}
 
 **New memo:** {doc_url}
 
 Let me know if you need any other changes."""
+
+        elif action == 'ANALYZE_THREAD':
+            doc_url = f"https://docs.google.com/document/d/{result.get('doc_id')}/edit"
+            summary = result.get('summary', '')
+            # Truncate summary for email if too long
+            if len(summary) > 500:
+                summary = summary[:500] + '...'
+
+            # Check if this was an update
+            updated = result.get('updated', False)
+            status = "Timeline updated!" if updated else "Timeline created!"
+
+            # Introducer info
+            introducer = result.get('introducer') or {}
+            intro_text = ""
+            if introducer and introducer.get('name'):
+                intro_text = f"\n**Introduced by:** {introducer.get('name', 'Unknown')}"
+                if introducer.get('context'):
+                    intro_text += f" ({introducer.get('context')})"
+
+            # Message count info
+            if updated:
+                msg_info = f"**Total messages:** {result.get('message_count', 0)} (+{result.get('new_messages', 0)} new)"
+            else:
+                msg_info = f"**Messages analyzed:** {result.get('message_count', 0)}"
+
+            return f"""✓ **{status}**
+
+**Company:** {result.get('company_name', result.get('domain'))}
+**Domain:** {result.get('domain')}
+{msg_info}{intro_text}
+
+**Summary:**
+{summary}
+
+**Full timeline:** {doc_url}
+
+Forward more threads to add to this relationship history."""
+
+        elif action == 'SCRAPE_YC':
+            batch = result.get('batch', 'W26')
+            added = result.get('added', 0)
+            skipped = result.get('skipped', 0)
+            errors = result.get('errors', 0)
+
+            # List added companies (limit to first 10)
+            added_companies = result.get('added_companies', [])
+            if added_companies:
+                companies_list = '\n'.join(f"  - {c}" for c in added_companies[:10])
+                if len(added_companies) > 10:
+                    companies_list += f"\n  - ... and {len(added_companies) - 10} more"
+            else:
+                companies_list = "  (none)"
+
+            return f"""✓ **YC {batch} companies imported!**
+
+**Added:** {added}
+**Skipped (already exists):** {skipped}
+**Errors:** {errors}
+
+**New companies:**
+{companies_list}
+
+Reply "generate memos" to create memos for the new companies."""
 
         elif action == 'HEALTH_CHECK':
             return "✓ **All systems operational!** The service is running properly."

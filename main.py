@@ -41,9 +41,12 @@ def get_credentials():
 def process_company(row: dict, sheets_service, firestore_service, drive_service,
                     gemini_service, docs_service) -> dict:
     """Process a single company row."""
+    from services import ResearchService
+
     company = row['company']
     domain = row['domain']
     row_number = row['row_number']
+    source = row.get('source', '')
 
     logger.info(f"Processing {company} ({domain})")
 
@@ -64,8 +67,21 @@ def process_company(row: dict, sheets_service, firestore_service, drive_service,
         # Create new document
         doc_id = drive_service.create_document(folder_id, company)
 
-        # Generate memo with Gemini
-        memo_content = gemini_service.generate_memo(company, domain)
+        # Get stored YC company data if available (from Bookface scraping)
+        yc_data = firestore_service.get_yc_company_data(company)
+
+        # Get relationship data from forwarded emails
+        relationship_data = firestore_service.get_relationship_data(domain=domain, company_name=company)
+
+        # Research the company
+        research_svc = ResearchService()
+        research = research_svc.research_company(company, domain, source=source)
+        research_context = research_svc.format_research_context(
+            research, yc_data=yc_data, relationship_data=relationship_data
+        )
+
+        # Generate memo with Gemini (with research context and web grounding)
+        memo_content = gemini_service.generate_memo(company, domain, research_context=research_context)
 
         # Insert content into document
         docs_service.insert_text(doc_id, memo_content)

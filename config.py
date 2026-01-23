@@ -12,6 +12,8 @@ class Config:
         self.firestore_collection = os.environ.get('FIRESTORE_COLLECTION', 'processed_domains')
         self.vertex_ai_region = os.environ.get('VERTEX_AI_REGION', 'us-central1')
         self.linkedin_cookie = os.environ.get('LINKEDIN_COOKIE', '')
+        self.bookface_cookie = os.environ.get('BOOKFACE_COOKIE', '')
+        self.serper_api_key = os.environ.get('SERPER_API_KEY', '')
 
         self.validate()
 

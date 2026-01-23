@@ -3,7 +3,7 @@ gunicorn==21.2.0
 google-auth==2.27.0
 google-api-python-client==2.116.0
 google-cloud-firestore==2.14.0
-google-cloud-aiplatform==1.38.0
+google-cloud-aiplatform>=1.60.0
 python-dotenv==1.0.0
 beautifulsoup4==4.12.3
 requests==2.31.0
