@@ -11,7 +11,9 @@ from services import (
     DriveService,
     GeminiService,
     DocsService,
-    EmailAgentService
+    EmailAgentService,
+    GmailService,
+    InboxSyncService
 )
 
 # Configure structured logging
@@ -25,13 +27,20 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 
-def get_credentials():
-    """Get Google Cloud credentials with required scopes."""
+def get_credentials(include_gmail: bool = False):
+    """Get Google Cloud credentials with required scopes.
+
+    Args:
+        include_gmail: Whether to include Gmail API scope (requires domain-wide delegation)
+    """
     scopes = [
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive',
         'https://www.googleapis.com/auth/documents'
     ]
+
+    if include_gmail:
+        scopes.append('https://www.googleapis.com/auth/gmail.readonly')
 
     # Use default credentials (service account in Cloud Run)
     credentials, project = default(scopes=scopes)
@@ -219,6 +228,117 @@ def process_email():
         }), 500
 
 
+@app.route('/sync-inbox', methods=['POST'])
+def sync_inbox():
+    """Sync emails from Gmail inbox for research and processing."""
+    logger.info("Received POST /sync-inbox request")
+
+    try:
+        data = request.get_json() or {}
+
+        # Get parameters from request
+        user_email = data.get('user_email')  # Required for service account delegation
+        query = data.get('query')  # Gmail search query
+        max_emails = data.get('max_emails', 50)
+        days_back = data.get('days_back', 7)
+        process_with_agent = data.get('process_with_agent', False)
+        store_for_research = data.get('store_for_research', True)
+
+        if not user_email:
+            return jsonify({
+                'status': 'error',
+                'message': 'user_email is required for Gmail API access'
+            }), 400
+
+        # Initialize credentials with Gmail scope
+        credentials = get_credentials(include_gmail=True)
+
+        # Create delegated credentials for the user
+        if hasattr(credentials, 'with_subject'):
+            gmail_credentials = credentials.with_subject(user_email)
+        else:
+            gmail_credentials = credentials
+
+        # Initialize services
+        gmail_service = GmailService(credentials=gmail_credentials, user_email=user_email)
+        firestore_service = FirestoreService()
+
+        # Set up email agent if needed
+        email_agent = None
+        services = None
+        if process_with_agent:
+            email_agent = EmailAgentService()
+            services = {
+                'sheets': SheetsService(credentials),
+                'firestore': firestore_service,
+                'drive': DriveService(credentials),
+                'gemini': GeminiService(),
+                'docs': DocsService(credentials)
+            }
+
+        # Create sync service and run
+        sync_service = InboxSyncService(gmail_service, firestore_service, email_agent)
+        result = sync_service.sync_inbox(
+            query=query,
+            max_emails=max_emails,
+            days_back=days_back,
+            process_with_agent=process_with_agent,
+            store_for_research=store_for_research,
+            services=services
+        )
+
+        return jsonify({
+            'status': 'success',
+            **result
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in /sync-inbox endpoint: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/emails/search', methods=['GET'])
+def search_emails():
+    """Search stored emails."""
+    logger.info("Received GET /emails/search request")
+
+    try:
+        search_term = request.args.get('q', '')
+        domain = request.args.get('domain')
+        limit = int(request.args.get('limit', 50))
+
+        firestore_service = FirestoreService()
+
+        # Create a minimal gmail service just for the sync service search methods
+        sync_service = InboxSyncService(None, firestore_service, None)
+
+        if domain:
+            results = sync_service.get_emails_by_domain(domain, limit=limit)
+        elif search_term:
+            results = sync_service.search_emails(search_term, limit=limit)
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Either q (search term) or domain parameter is required'
+            }), 400
+
+        return jsonify({
+            'status': 'success',
+            'count': len(results),
+            'emails': results
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in /emails/search endpoint: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
@@ -233,6 +353,8 @@ def root():
         'endpoints': {
             '/run': 'POST - Process companies from sheet',
             '/email': 'POST - Process email with AI agent',
+            '/sync-inbox': 'POST - Sync emails from Gmail inbox',
+            '/emails/search': 'GET - Search stored emails (params: q, domain, limit)',
             '/health': 'GET - Health check'
         }
     }), 200

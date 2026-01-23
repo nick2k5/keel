@@ -599,3 +599,753 @@ class TestProcessEmail:
                     assert 'reply_text' in result
                     assert isinstance(result['reply_text'], str)
                     assert 'operational' in result['reply_text'].lower()
+
+
+class TestGetActionDecision:
+    """Tests for _get_action_decision method."""
+
+    def test_get_action_decision_handles_error(self, mock_services):
+        """Test that _get_action_decision handles exceptions gracefully."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel') as mock_model_class:
+                    mock_model = Mock()
+                    mock_model_class.return_value = mock_model
+
+                    # Make generate_content raise an exception
+                    mock_model.generate_content.side_effect = Exception('API error')
+
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    email_data = {
+                        'from': 'test@example.com',
+                        'subject': 'Test',
+                        'body': 'Test body'
+                    }
+
+                    result = svc._get_action_decision(email_data)
+
+                    # Should return NONE action on error
+                    assert result['action'] == 'NONE'
+                    assert 'trouble' in result['reasoning'].lower()
+
+    def test_get_action_decision_cleans_json_markdown(self, mock_services):
+        """Test that _get_action_decision cleans markdown from response."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel') as mock_model_class:
+                    mock_model = Mock()
+                    mock_model_class.return_value = mock_model
+
+                    # Response with markdown code block
+                    mock_response = Mock()
+                    mock_response.text = '''```json
+{"action": "ADD_COMPANY", "parameters": {"company": "TestCo", "domain": "test.com"}, "reasoning": "User wants to add company"}
+```'''
+                    mock_model.generate_content.return_value = mock_response
+
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    email_data = {
+                        'from': 'test@example.com',
+                        'subject': 'Add TestCo',
+                        'body': 'Add TestCo (test.com)'
+                    }
+
+                    result = svc._get_action_decision(email_data)
+
+                    assert result['action'] == 'ADD_COMPANY'
+                    assert result['parameters']['company'] == 'TestCo'
+
+
+class TestExecuteActionBranches:
+    """Tests for various _execute_action branches."""
+
+    def test_execute_action_generate_memos(self, mock_services):
+        """Test GENERATE_MEMOS action execution."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''
+            mock_config.linkedin_cookie = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    mock_services['sheets'].get_rows_to_process.return_value = []
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'GENERATE_MEMOS',
+                        'parameters': {}
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is True
+                    assert result['processed'] == 0
+
+    def test_execute_action_generate_memos_with_force(self, mock_services):
+        """Test GENERATE_MEMOS with force parameter."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''
+            mock_config.linkedin_cookie = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    mock_services['sheets'].get_all_companies.return_value = []
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'GENERATE_MEMOS',
+                        'parameters': {'force': True}
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    mock_services['sheets'].get_all_companies.assert_called_once()
+                    assert result['success'] is True
+
+    def test_execute_action_add_company(self, mock_services):
+        """Test ADD_COMPANY action execution."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    mock_services['sheets'].add_company.return_value = {
+                        'success': True,
+                        'action': 'added',
+                        'company': 'TestCo',
+                        'domain': 'testco.com'
+                    }
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'ADD_COMPANY',
+                        'parameters': {'company': 'TestCo', 'domain': 'testco.com'}
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is True
+                    mock_services['sheets'].add_company.assert_called_once_with('TestCo', 'testco.com')
+
+    def test_execute_action_add_company_missing_params(self, mock_services):
+        """Test ADD_COMPANY with missing parameters."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'ADD_COMPANY',
+                        'parameters': {}  # Missing company and domain
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is False
+                    assert 'missing' in result['error'].lower()
+
+    def test_execute_action_update_company_missing_company(self, mock_services):
+        """Test UPDATE_COMPANY with missing company name."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'UPDATE_COMPANY',
+                        'parameters': {'new_domain': 'new.com'}  # Missing company
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is False
+                    assert 'missing company' in result['error'].lower()
+
+    def test_execute_action_update_company_missing_update_data(self, mock_services):
+        """Test UPDATE_COMPANY with missing update data."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'UPDATE_COMPANY',
+                        'parameters': {'company': 'TestCo'}  # Missing new_domain and new_name
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is False
+                    assert 'missing' in result['error'].lower()
+
+    def test_execute_action_regenerate_memo_missing_identifier(self, mock_services):
+        """Test REGENERATE_MEMO with missing identifier."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'REGENERATE_MEMO',
+                        'parameters': {}  # Missing domain and company
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is False
+                    assert 'missing' in result['error'].lower()
+
+    def test_execute_action_analyze_thread_no_email_data(self, mock_services):
+        """Test ANALYZE_THREAD with no email data."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'ANALYZE_THREAD',
+                        'parameters': {}
+                    }
+
+                    result = svc._execute_action(decision, mock_services, email_data=None)
+
+                    assert result['success'] is False
+                    assert 'no email data' in result['error'].lower()
+
+    def test_execute_action_analyze_thread_no_body(self, mock_services):
+        """Test ANALYZE_THREAD with empty body."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'ANALYZE_THREAD',
+                        'parameters': {}
+                    }
+
+                    email_data = {'from': 'test@example.com', 'subject': 'Test', 'body': ''}
+
+                    result = svc._execute_action(decision, mock_services, email_data=email_data)
+
+                    assert result['success'] is False
+                    assert 'no email body' in result['error'].lower()
+
+    def test_execute_action_scrape_yc(self, mock_services):
+        """Test SCRAPE_YC action execution."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.bookface_cookie = 'test-cookie'  # Must be non-empty
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    with patch('services.email_agent.BookfaceService') as MockBookface:
+                        mock_bf = Mock()
+                        mock_bf.scrape_and_add_companies.return_value = {
+                            'success': True,
+                            'added': 2,
+                            'skipped': 0,
+                            'batch': 'W26',
+                            'added_companies': ['Company1', 'Company2']
+                        }
+                        MockBookface.return_value = mock_bf
+
+                        from services.email_agent import EmailAgentService
+
+                        svc = EmailAgentService()
+
+                        decision = {
+                            'action': 'SCRAPE_YC',
+                            'parameters': {'batch': 'W26', 'pages': '2'}
+                        }
+
+                        result = svc._execute_action(decision, mock_services)
+
+                        assert result['success'] is True
+                        assert result['added'] == 2
+
+    def test_execute_action_scrape_yc_no_cookie(self, mock_services):
+        """Test SCRAPE_YC action without cookie configured."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.bookface_cookie = ''  # Empty cookie
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'SCRAPE_YC',
+                        'parameters': {'batch': 'W26'}
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is False
+                    assert 'cookie' in result['error'].lower()
+
+    def test_execute_action_chained_regenerate_memo(self, mock_services, mock_sheet_data):
+        """Test chained REGENERATE_MEMO action."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = 'test-key'
+            mock_config.linkedin_cookie = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Set up mock to return company
+                    mock_services['sheets'].update_company.return_value = {
+                        'success': True,
+                        'company': 'TestCo',
+                        'old_domain': 'old.com',
+                        'new_domain': 'new.com'
+                    }
+
+                    # Set up sheet data for regenerate
+                    mock_services['sheets'].service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = mock_sheet_data
+
+                    svc = EmailAgentService()
+
+                    # Skip the actual regeneration
+                    with patch.object(svc, '_regenerate_memo') as mock_regen:
+                        mock_regen.return_value = {'success': True}
+
+                        decision = {
+                            'action': 'UPDATE_COMPANY',
+                            'parameters': {'company': 'TestCo', 'new_domain': 'new.com'},
+                            'also_do': 'REGENERATE_MEMO'
+                        }
+
+                        result = svc._execute_action(decision, mock_services)
+
+                        assert result['success'] is True
+                        assert result.get('chained_action') == 'REGENERATE_MEMO'
+
+
+class TestRunMemoGeneration:
+    """Tests for _run_memo_generation method."""
+
+    def test_run_memo_generation_processes_companies(self, mock_services):
+        """Test memo generation with companies to process."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''
+            mock_config.linkedin_cookie = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    mock_services['sheets'].get_rows_to_process.return_value = [
+                        {'company': 'TestCo', 'domain': 'testco.com', 'row_number': 2}
+                    ]
+
+                    svc = EmailAgentService()
+
+                    # Mock _process_single_company
+                    with patch.object(svc, '_process_single_company') as mock_process:
+                        mock_process.return_value = {'status': 'success', 'company': 'TestCo'}
+
+                        result = svc._run_memo_generation(mock_services, force=False)
+
+                        assert result['success'] is True
+                        assert result['processed'] == 1
+                        mock_process.assert_called_once()
+
+    def test_run_memo_generation_with_force(self, mock_services):
+        """Test memo generation with force flag."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''
+            mock_config.linkedin_cookie = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    mock_services['sheets'].get_all_companies.return_value = [
+                        {'company': 'TestCo', 'domain': 'testco.com', 'row_number': 2}
+                    ]
+
+                    svc = EmailAgentService()
+
+                    with patch.object(svc, '_process_single_company') as mock_process:
+                        mock_process.return_value = {'status': 'success'}
+
+                        result = svc._run_memo_generation(mock_services, force=True)
+
+                        mock_services['sheets'].get_all_companies.assert_called_once()
+                        mock_services['firestore'].clear_processed.assert_called()
+
+    def test_run_memo_generation_skips_empty_keys(self, mock_services):
+        """Test that memo generation skips rows without domain or company."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''
+            mock_config.linkedin_cookie = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    mock_services['sheets'].get_rows_to_process.return_value = [
+                        {'company': '', 'domain': '', 'row_number': 2}  # Empty - should skip
+                    ]
+
+                    svc = EmailAgentService()
+
+                    with patch.object(svc, '_process_single_company') as mock_process:
+                        result = svc._run_memo_generation(mock_services, force=False)
+
+                        # Should not process since key is empty
+                        mock_process.assert_not_called()
+                        assert result['processed'] == 0
+
+
+class TestAnalyzeThread:
+    """Tests for _analyze_thread method."""
+
+    def test_analyze_thread_success(self, mock_services):
+        """Test successful thread analysis."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    # Mock helper methods
+                    with patch.object(svc, '_parse_email_thread') as mock_parse:
+                        with patch.object(svc, '_extract_domain_from_messages') as mock_domain:
+                            with patch.object(svc, '_get_relationship') as mock_get_rel:
+                                with patch.object(svc, '_generate_relationship_analysis') as mock_gen:
+                                    with patch.object(svc, '_create_timeline_doc') as mock_create_doc:
+                                        with patch.object(svc, '_store_relationship') as mock_store:
+                                            mock_parse.return_value = [
+                                                {'from': 'test@company.com', 'body': 'Hello'}
+                                            ]
+                                            mock_domain.return_value = 'company.com'
+                                            mock_get_rel.return_value = None  # No existing
+                                            mock_gen.return_value = {
+                                                'company_name': 'Company Inc',
+                                                'summary': 'Test summary',
+                                                'introducer': {'name': 'John'}
+                                            }
+                                            mock_create_doc.return_value = 'doc-123'
+                                            mock_services['drive'].find_existing_folder.return_value = None
+                                            mock_services['drive'].create_folder.return_value = 'folder-123'
+                                            mock_services['sheets'].add_company.return_value = {'success': True}
+
+                                            email_body = "From: test@company.com\nHello"
+                                            result = svc._analyze_thread(email_body, mock_services)
+
+                                            assert result['success'] is True
+                                            assert result['domain'] == 'company.com'
+
+    def test_analyze_thread_no_messages(self, mock_services):
+        """Test thread analysis when no messages can be parsed."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    with patch.object(svc, '_parse_email_thread') as mock_parse:
+                        mock_parse.return_value = []  # No messages parsed
+
+                        result = svc._analyze_thread("some text", mock_services)
+
+                        assert result['success'] is False
+                        assert 'could not parse' in result['error'].lower()
+
+    def test_analyze_thread_no_domain(self, mock_services):
+        """Test thread analysis when domain cannot be determined."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    with patch.object(svc, '_parse_email_thread') as mock_parse:
+                        with patch.object(svc, '_extract_domain_from_messages') as mock_domain:
+                            mock_parse.return_value = [{'from': 'test', 'body': 'text'}]
+                            mock_domain.return_value = None  # No domain found
+
+                            result = svc._analyze_thread("some text", mock_services)
+
+                            assert result['success'] is False
+                            assert 'could not determine' in result['error'].lower()
+
+
+class TestGenerateRelationshipAnalysis:
+    """Tests for _generate_relationship_analysis method."""
+
+    def test_generate_relationship_analysis_success(self):
+        """Test successful relationship analysis generation."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel') as mock_model_class:
+                    mock_model = Mock()
+                    mock_model_class.return_value = mock_model
+
+                    mock_response = Mock()
+                    mock_response.text = '''{
+                        "company_name": "TestCo",
+                        "contacts": [{"name": "John", "email": "john@test.com"}],
+                        "timeline": [{"date": "2024-01-01", "event": "First contact"}],
+                        "summary": "Good relationship",
+                        "key_topics": ["tech"],
+                        "sentiment": "positive",
+                        "next_steps": "Follow up"
+                    }'''
+                    mock_model.generate_content.return_value = mock_response
+
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    messages = [
+                        {'from': 'john@test.com', 'date': '2024-01-01', 'subject': 'Hi', 'body': 'Hello'}
+                    ]
+
+                    result = svc._generate_relationship_analysis(messages, 'test.com')
+
+                    assert result['company_name'] == 'TestCo'
+                    assert len(result['contacts']) == 1
+
+    def test_generate_relationship_analysis_cleans_markdown(self):
+        """Test that markdown is cleaned from response."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel') as mock_model_class:
+                    mock_model = Mock()
+                    mock_model_class.return_value = mock_model
+
+                    mock_response = Mock()
+                    mock_response.text = '''```json
+{
+    "company_name": "TestCo",
+    "contacts": [],
+    "timeline": [],
+    "summary": "Summary",
+    "key_topics": [],
+    "sentiment": "neutral",
+    "next_steps": ""
+}
+```'''
+                    mock_model.generate_content.return_value = mock_response
+
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    result = svc._generate_relationship_analysis([], 'test.com')
+
+                    assert result['company_name'] == 'TestCo'
+
+    def test_generate_relationship_analysis_error(self):
+        """Test relationship analysis handles errors."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel') as mock_model_class:
+                    mock_model = Mock()
+                    mock_model_class.return_value = mock_model
+
+                    mock_model.generate_content.side_effect = Exception('API Error')
+
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    result = svc._generate_relationship_analysis([], 'test.com')
+
+                    # Should return default values on error
+                    assert result['company_name'] == 'test.com'
+                    assert 'Error' in result['summary']
+
+
+class TestProcessSingleCompany:
+    """Tests for _process_single_company method."""
+
+    def test_process_single_company_success(self, mock_services):
+        """Test successful single company processing."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = 'key'
+            mock_config.linkedin_cookie = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    with patch('services.email_agent.ResearchService') as MockResearch:
+                        mock_research = Mock()
+                        mock_research.research_company.return_value = {}
+                        mock_research.format_research_context.return_value = 'context'
+                        MockResearch.return_value = mock_research
+
+                        from services.email_agent import EmailAgentService
+
+                        svc = EmailAgentService()
+
+                        mock_services['firestore'].is_processed.return_value = False
+                        mock_services['firestore'].get_yc_company_data.return_value = None
+                        mock_services['firestore'].get_relationship_data.return_value = None
+                        mock_services['drive'].create_folder.return_value = 'folder-id'
+                        mock_services['drive'].create_document.return_value = 'doc-id'
+                        mock_services['gemini'].generate_memo.return_value = 'Memo content'
+
+                        row = {'company': 'TestCo', 'domain': 'test.com', 'row_number': 2, 'source': ''}
+
+                        result = svc._process_single_company(
+                            row,
+                            mock_services['sheets'],
+                            mock_services['firestore'],
+                            mock_services['drive'],
+                            mock_services['gemini'],
+                            mock_services['docs']
+                        )
+
+                        assert result['status'] == 'success'
+                        assert result['company'] == 'TestCo'
+
+    def test_process_single_company_already_processed(self, mock_services):
+        """Test that already processed companies are skipped."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    mock_services['firestore'].is_processed.return_value = True
+
+                    row = {'company': 'TestCo', 'domain': 'test.com', 'row_number': 2}
+
+                    result = svc._process_single_company(
+                        row,
+                        mock_services['sheets'],
+                        mock_services['firestore'],
+                        mock_services['drive'],
+                        mock_services['gemini'],
+                        mock_services['docs']
+                    )
+
+                    assert result['status'] == 'skipped'
+                    assert result['reason'] == 'already_processed'
+
+    def test_process_single_company_error(self, mock_services):
+        """Test error handling in single company processing."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    mock_services['firestore'].is_processed.return_value = False
+                    mock_services['drive'].create_folder.side_effect = Exception('Drive error')
+
+                    row = {'company': 'TestCo', 'domain': 'test.com', 'row_number': 2}
+
+                    result = svc._process_single_company(
+                        row,
+                        mock_services['sheets'],
+                        mock_services['firestore'],
+                        mock_services['drive'],
+                        mock_services['gemini'],
+                        mock_services['docs']
+                    )
+
+                    assert result['status'] == 'error'
+                    assert 'Drive error' in result['error']

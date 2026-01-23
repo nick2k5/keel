@@ -106,7 +106,7 @@ curl -X POST ${SERVICE_URL}/run
 
 ## File Structure
 
-- `main.py` - Flask application with `/run`, `/email`, and `/health` endpoints
+- `main.py` - Flask application with `/run`, `/email`, `/sync-inbox`, and `/health` endpoints
 - `services/` - Service modules package
   - `__init__.py` - Re-exports all service classes for backward compatibility
   - `sheets.py` - SheetsService for Google Sheets operations
@@ -117,6 +117,7 @@ curl -X POST ${SERVICE_URL}/run
   - `research.py` - ResearchService for deep web research
   - `bookface.py` - BookfaceService for YC Bookface scraping
   - `email_agent.py` - EmailAgentService for email-based commands
+  - `gmail.py` - GmailService and InboxSyncService for Gmail API integration
 - `config.py` - Configuration management, environment variables, Secret Manager integration
 - `requirements.txt` - Python dependencies
 - `Dockerfile` - Container configuration for Cloud Run
@@ -188,6 +189,61 @@ The `/email` endpoint accepts POST requests with email data and executes command
 - **ANALYZE_THREAD** - (forwarded email) → Create relationship timeline from email thread
 - **SCRAPE_YC** - "scrape YC [batch]" → Import companies from YC Bookface
 - **HEALTH_CHECK** - "status", "health" → Check service health
+
+## Gmail Inbox Sync
+
+The `/sync-inbox` endpoint syncs emails from a Gmail inbox for research and processing.
+
+### Setup Requirements
+
+1. **Enable Gmail API** in your GCP project:
+   ```bash
+   gcloud services enable gmail.googleapis.com
+   ```
+
+2. **Configure Domain-Wide Delegation** (for service account access):
+   - Go to Google Workspace Admin Console → Security → API Controls → Domain-wide Delegation
+   - Add the service account's Client ID
+   - Add scope: `https://www.googleapis.com/auth/gmail.readonly`
+
+### Usage
+
+```bash
+curl -X POST ${SERVICE_URL}/sync-inbox \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_email": "nick@friale.com",
+    "query": "from:@stripe.com",
+    "max_emails": 50,
+    "days_back": 30,
+    "store_for_research": true,
+    "process_with_agent": false
+  }'
+```
+
+### Parameters
+
+- `user_email` (required) - Gmail address to sync from
+- `query` - Gmail search query (e.g., "from:someone@example.com", "subject:intro")
+- `max_emails` - Maximum emails to fetch (default: 50)
+- `days_back` - How many days back to look (default: 7)
+- `store_for_research` - Store emails in Firestore for research (default: true)
+- `process_with_agent` - Process each email through EmailAgentService (default: false)
+
+### Search Stored Emails
+
+```bash
+# Search by domain
+curl "${SERVICE_URL}/emails/search?domain=stripe.com&limit=20"
+
+# Search by term
+curl "${SERVICE_URL}/emails/search?q=introduction&limit=20"
+```
+
+### Firestore Collections
+
+- `processed_emails` - Tracks which email IDs have been processed
+- `email_research` - Stores email content indexed by sender domain
 
 ## Error Handling
 

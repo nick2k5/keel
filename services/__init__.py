@@ -7,6 +7,7 @@ from services.gemini import GeminiService
 from services.research import ResearchService
 from services.bookface import BookfaceService
 from services.email_agent import EmailAgentService
+from services.gmail import GmailService, InboxSyncService
 
 __all__ = [
     'SheetsService',
@@ -17,4 +18,6 @@ __all__ = [
     'ResearchService',
     'BookfaceService',
     'EmailAgentService',
+    'GmailService',
+    'InboxSyncService',
 ]
