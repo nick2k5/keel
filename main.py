@@ -10,7 +10,8 @@ from services import (
     FirestoreService,
     DriveService,
     GeminiService,
-    DocsService
+    DocsService,
+    EmailAgentService
 )
 
 # Configure structured logging
@@ -60,14 +61,14 @@ def process_company(row: dict, sheets_service, firestore_service, drive_service,
         # Create folder
         folder_id = drive_service.create_folder(company, domain)
 
-        # Copy template
-        doc_id = drive_service.copy_template(folder_id, company)
+        # Create new document
+        doc_id = drive_service.create_document(folder_id, company)
 
         # Generate memo with Gemini
-        memo_data = gemini_service.generate_memo(company, domain)
+        memo_content = gemini_service.generate_memo(company, domain)
 
-        # Update document
-        docs_service.update_document(doc_id, company, domain, memo_data)
+        # Insert content into document
+        docs_service.insert_text(doc_id, memo_content)
 
         # Mark as processed in Firestore
         firestore_service.mark_processed(domain, company, doc_id, folder_id)
@@ -158,6 +159,50 @@ def run_processing():
         }), 500
 
 
+@app.route('/email', methods=['POST'])
+def process_email():
+    """Process incoming email and execute appropriate action."""
+    logger.info("Received POST /email request")
+
+    try:
+        email_data = request.get_json()
+        if not email_data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No email data provided'
+            }), 400
+
+        # Initialize services
+        credentials = get_credentials()
+        services = {
+            'sheets': SheetsService(credentials),
+            'firestore': FirestoreService(),
+            'drive': DriveService(credentials),
+            'gemini': GeminiService(),
+            'docs': DocsService(credentials)
+        }
+
+        # Process email with AI agent
+        email_agent = EmailAgentService()
+        result = email_agent.process_email(email_data, services)
+
+        return jsonify({
+            'status': 'success',
+            'action': result['decision'].get('action'),
+            'reasoning': result['decision'].get('reasoning'),
+            'reply_text': result['reply_text'],
+            'result': result['result']
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in /email endpoint: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'reply_text': f"Sorry, I encountered an error processing your request: {str(e)}"
+        }), 500
+
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint."""
@@ -171,6 +216,7 @@ def root():
         'service': 'keel-memo-generator',
         'endpoints': {
             '/run': 'POST - Process companies from sheet',
+            '/email': 'POST - Process email with AI agent',
             '/health': 'GET - Health check'
         }
     }), 200
