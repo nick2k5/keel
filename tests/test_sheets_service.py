@@ -8,7 +8,7 @@ class TestSheetsService:
 
     def test_get_rows_to_process_returns_unprocessed(self):
         """Test that get_rows_to_process returns rows without status (requires domain)."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -24,7 +24,7 @@ class TestSheetsService:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             mock_creds = Mock()
             svc = SheetsService(mock_creds)
             svc.spreadsheet_id = 'test-sheet-id'
@@ -40,7 +40,7 @@ class TestSheetsService:
 
     def test_get_rows_to_process_empty_sheet(self):
         """Test get_rows_to_process with empty sheet."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -50,7 +50,7 @@ class TestSheetsService:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -60,13 +60,13 @@ class TestSheetsService:
 
     def test_get_rows_to_process_no_values_key(self):
         """Test get_rows_to_process when API returns no values."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
             mock_service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = {}
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -76,7 +76,7 @@ class TestSheetsService:
 
     def test_get_all_companies(self):
         """Test get_all_companies returns all rows."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -89,7 +89,7 @@ class TestSheetsService:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -103,11 +103,11 @@ class TestSheetsService:
 
     def test_update_status(self):
         """Test updating row status."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -119,7 +119,7 @@ class TestSheetsService:
 
     def test_add_company_new(self):
         """Test adding a new company."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -131,7 +131,7 @@ class TestSheetsService:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -144,7 +144,7 @@ class TestSheetsService:
 
     def test_add_company_already_exists(self):
         """Test adding a company that already exists returns error."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -155,7 +155,7 @@ class TestSheetsService:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -168,7 +168,7 @@ class TestSheetsService:
 
     def test_add_company_case_insensitive_match(self):
         """Test that domain matching is case-insensitive."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -179,7 +179,7 @@ class TestSheetsService:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -195,7 +195,7 @@ class TestUpdateCompany:
 
     def test_update_company_domain(self):
         """Test updating a company's domain."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -206,7 +206,7 @@ class TestUpdateCompany:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -221,7 +221,7 @@ class TestUpdateCompany:
 
     def test_update_company_cleans_url(self):
         """Test that update_company cleans URLs properly."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -232,7 +232,7 @@ class TestUpdateCompany:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -243,7 +243,7 @@ class TestUpdateCompany:
 
     def test_update_company_not_found(self):
         """Test updating a company that doesn't exist."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -254,7 +254,7 @@ class TestUpdateCompany:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -265,7 +265,7 @@ class TestUpdateCompany:
 
     def test_update_company_clears_status(self):
         """Test that updating domain clears the status for reprocessing."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -276,7 +276,7 @@ class TestUpdateCompany:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 
@@ -288,7 +288,7 @@ class TestUpdateCompany:
 
     def test_update_company_by_domain_identifier(self):
         """Test finding company by domain to update."""
-        with patch('services.build') as mock_build:
+        with patch('services.sheets.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -299,7 +299,7 @@ class TestUpdateCompany:
                 ]
             }
 
-            from services import SheetsService
+            from services.sheets import SheetsService
             svc = SheetsService(Mock())
             svc.spreadsheet_id = 'test-sheet-id'
 

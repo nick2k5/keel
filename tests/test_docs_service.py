@@ -8,7 +8,7 @@ class TestDocsService:
 
     def test_insert_text_empty_doc(self):
         """Test inserting text into an empty document."""
-        with patch('services.build') as mock_build:
+        with patch('services.docs.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -17,7 +17,7 @@ class TestDocsService:
                 'body': {'content': [{'endIndex': 1}]}
             }
 
-            from services import DocsService
+            from services.docs import DocsService
             svc = DocsService(Mock())
 
             svc.insert_text('doc-123', 'Hello World')
@@ -27,7 +27,7 @@ class TestDocsService:
 
     def test_insert_text_replaces_existing_content(self):
         """Test that insert_text clears existing content before inserting."""
-        with patch('services.build') as mock_build:
+        with patch('services.docs.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -36,7 +36,7 @@ class TestDocsService:
                 'body': {'content': [{'endIndex': 100}]}
             }
 
-            from services import DocsService
+            from services.docs import DocsService
             svc = DocsService(Mock())
 
             svc.insert_text('doc-123', 'New Content')
@@ -46,7 +46,7 @@ class TestDocsService:
 
     def test_insert_text_formats_content(self):
         """Test that insert_text includes the content in the request."""
-        with patch('services.build') as mock_build:
+        with patch('services.docs.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -54,7 +54,7 @@ class TestDocsService:
                 'body': {'content': [{'endIndex': 1}]}
             }
 
-            from services import DocsService
+            from services.docs import DocsService
             svc = DocsService(Mock())
 
             test_content = "# Test Memo\n\nThis is a test."
@@ -71,7 +71,7 @@ class TestDocsService:
 
     def test_insert_text_handles_multiline(self):
         """Test inserting multi-line content."""
-        with patch('services.build') as mock_build:
+        with patch('services.docs.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -79,7 +79,7 @@ class TestDocsService:
                 'body': {'content': [{'endIndex': 1}]}
             }
 
-            from services import DocsService
+            from services.docs import DocsService
             svc = DocsService(Mock())
 
             multiline_content = """# Company Memo
@@ -104,7 +104,7 @@ class TestDocsServiceEdgeCases:
 
     def test_insert_text_empty_content(self):
         """Test inserting empty content."""
-        with patch('services.build') as mock_build:
+        with patch('services.docs.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -112,7 +112,7 @@ class TestDocsServiceEdgeCases:
                 'body': {'content': [{'endIndex': 1}]}
             }
 
-            from services import DocsService
+            from services.docs import DocsService
             svc = DocsService(Mock())
 
             # Should not raise an error
@@ -120,7 +120,7 @@ class TestDocsServiceEdgeCases:
 
     def test_insert_text_special_characters(self):
         """Test inserting content with special characters."""
-        with patch('services.build') as mock_build:
+        with patch('services.docs.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -128,7 +128,7 @@ class TestDocsServiceEdgeCases:
                 'body': {'content': [{'endIndex': 1}]}
             }
 
-            from services import DocsService
+            from services.docs import DocsService
             svc = DocsService(Mock())
 
             special_content = "Company: Tëst™ Inc. — Revenue: $1M+ (2024)"

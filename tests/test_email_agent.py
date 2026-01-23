@@ -17,15 +17,15 @@ class TestEmailAgentService:
 
     def test_regenerate_memo_by_domain(self, mock_services, mock_sheet_data):
         """Test regenerating memo by domain."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     # Set up sheet data mock
                     mock_services['sheets'].service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = mock_sheet_data
@@ -38,7 +38,7 @@ class TestEmailAgentService:
                         }
 
                         # Mock ResearchService
-                        with patch('services.ResearchService') as MockResearch:
+                        with patch('services.email_agent.ResearchService') as MockResearch:
                             mock_research_instance = Mock()
                             mock_research_instance.research_company.return_value = {
                                 'company': 'Forithmus',
@@ -63,21 +63,21 @@ class TestEmailAgentService:
 
     def test_regenerate_memo_by_company_name(self, mock_services, mock_sheet_data):
         """Test regenerating memo by company name (for companies without domains)."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     # Set up sheet data mock
                     mock_services['sheets'].service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = mock_sheet_data
 
                     # Mock ResearchService
-                    with patch('services.ResearchService') as MockResearch:
+                    with patch('services.email_agent.ResearchService') as MockResearch:
                         mock_research_instance = Mock()
                         mock_research_instance.research_company.return_value = {
                             'company': 'Cofia',
@@ -102,13 +102,13 @@ class TestEmailAgentService:
 
     def test_regenerate_memo_not_found(self, mock_services, mock_sheet_data):
         """Test regenerating memo for non-existent company."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     mock_services['sheets'].service.spreadsheets.return_value.values.return_value.get.return_value.execute.return_value = mock_sheet_data
 
@@ -120,13 +120,13 @@ class TestEmailAgentService:
 
     def test_format_response_regenerate_memo(self, mock_services):
         """Test response formatting for regenerated memo."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -147,13 +147,13 @@ class TestEmailAgentService:
 
     def test_format_response_no_domain(self, mock_services):
         """Test response formatting for company without domain."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -176,13 +176,13 @@ class TestActionDetection:
 
     def test_actions_defined(self):
         """Test that all expected actions are defined."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -207,13 +207,13 @@ class TestUpdateCompanyAction:
 
     def test_execute_update_company(self, mock_services):
         """Test executing UPDATE_COMPANY action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     # Mock the sheets update_company method
                     mock_services['sheets'].update_company.return_value = {
@@ -241,15 +241,15 @@ class TestUpdateCompanyAction:
 
     def test_execute_update_company_with_chained_generate(self, mock_services):
         """Test UPDATE_COMPANY with chained GENERATE_MEMOS action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     # Mock the sheets update_company method
                     mock_services['sheets'].update_company.return_value = {
@@ -279,13 +279,13 @@ class TestUpdateCompanyAction:
 
     def test_format_response_update_company(self, mock_services):
         """Test response formatting for UPDATE_COMPANY action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -310,13 +310,13 @@ class TestEmailParsing:
 
     def test_parse_email_thread_single_message(self):
         """Test parsing a single email message."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -337,13 +337,13 @@ class TestEmailParsing:
 
     def test_parse_email_thread_forwarded(self):
         """Test parsing forwarded email thread."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -372,13 +372,13 @@ class TestEmailParsing:
 
     def test_extract_domain_from_messages(self):
         """Test extracting domain from email messages."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -399,13 +399,13 @@ class TestFormatResponse:
 
     def test_format_response_generate_memos(self):
         """Test response formatting for GENERATE_MEMOS action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -425,13 +425,13 @@ class TestFormatResponse:
 
     def test_format_response_add_company(self):
         """Test response formatting for ADD_COMPANY action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -449,13 +449,13 @@ class TestFormatResponse:
 
     def test_format_response_health_check(self):
         """Test response formatting for HEALTH_CHECK action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -468,13 +468,13 @@ class TestFormatResponse:
 
     def test_format_response_error(self):
         """Test response formatting when action fails."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -490,13 +490,13 @@ class TestFormatResponse:
 
     def test_format_response_scrape_yc(self):
         """Test response formatting for SCRAPE_YC action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -521,13 +521,13 @@ class TestExecuteAction:
 
     def test_execute_action_none(self):
         """Test executing NONE action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -542,13 +542,13 @@ class TestExecuteAction:
 
     def test_execute_action_health_check(self, mock_services):
         """Test executing HEALTH_CHECK action."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel'):
-                    from services import EmailAgentService
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 
@@ -567,12 +567,12 @@ class TestProcessEmail:
 
     def test_process_email_returns_response(self, mock_services):
         """Test that process_email returns a properly formatted response."""
-        with patch('services.config') as mock_config:
+        with patch('services.email_agent.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.vertexai'):
-                with patch('services.GenerativeModel') as mock_model_class:
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel') as mock_model_class:
                     mock_model = Mock()
                     mock_model_class.return_value = mock_model
 
@@ -583,7 +583,7 @@ class TestProcessEmail:
 ```'''
                     mock_model.generate_content.return_value = mock_response
 
-                    from services import EmailAgentService
+                    from services.email_agent import EmailAgentService
 
                     svc = EmailAgentService()
 

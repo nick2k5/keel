@@ -37,24 +37,12 @@ gcloud firestore databases create --location=us-central1
    - Column A: Company
    - Column B: Domain
    - Column C: Status
+   - Column D: Source (optional, e.g., "W26" for YC batch)
 
-2. **Create a Google Docs template** with placeholders:
-   - `{{COMPANY}}`
-   - `{{DOMAIN}}`
-   - `{{EXEC_SUMMARY}}`
-   - `{{TEAM}}`
-   - `{{PRODUCT}}`
-   - `{{MARKET}}`
-   - `{{TRACTION}}`
-   - `{{RISKS}}`
-   - `{{QUESTIONS}}`
-   - `{{RECOMMENDATION}}`
+2. **Create a Shared Drive folder** where company folders will be created.
 
-3. **Create a Shared Drive folder** where company folders will be created.
-
-4. **Note the IDs**:
+3. **Note the IDs**:
    - Spreadsheet ID (from URL: `https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/...`)
-   - Template Doc ID (from URL: `https://docs.google.com/document/d/{DOC_ID}/...`)
    - Parent Folder ID (from URL: `https://drive.google.com/drive/folders/{FOLDER_ID}`)
 
    0ADTF8Zi3POaxUk9PVA
@@ -81,7 +69,6 @@ gcloud run deploy keel-memo-generator \
   --set-env-vars "GCP_PROJECT_ID=keel-485016" \
   --set-env-vars "SPREADSHEET_ID=1b8etSdkKMLsVSYQfGU6zwt4EYcJnf3WCXh_owBB3jMw" \
   --set-env-vars "DRIVE_PARENT_FOLDER_ID=0ADTF8Zi3POaxUk9PVA" \
-  --set-env-vars "TEMPLATE_DOC_ID=1praAKxBxLVWsjU6Wk78kDf1epsOpE_2my03eaXJtHVY" \
   --set-env-vars "FIRESTORE_COLLECTION=processed_domains" \
   --memory 1Gi \
   --cpu 1 \
@@ -125,7 +112,6 @@ In Google Workspace Admin:
 
 1. Go to the Google Sheet and share it with the service account email (Editor access)
 2. Go to the Shared Drive and share it with the service account email (Content Manager access)
-3. Share the template document with the service account email (Reader access)
 
 Alternatively, share the parent Shared Drive with the service account to grant access to all resources.
 

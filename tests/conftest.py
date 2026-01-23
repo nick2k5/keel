@@ -315,7 +315,7 @@ def mock_services(mock_sheets_service, mock_firestore_service, mock_drive_servic
 @pytest.fixture
 def patch_config():
     """Patch config module."""
-    with patch('services.config') as mock_config:
+    with patch('services.research.config') as mock_config:
         mock_config.project_id = 'test-project'
         mock_config.spreadsheet_id = 'test-spreadsheet-id'
         mock_config.drive_parent_folder_id = 'test-folder-id'
@@ -329,7 +329,7 @@ def patch_config():
 @pytest.fixture
 def patch_requests(mock_search_results, mock_domain_pages):
     """Patch requests for web scraping tests."""
-    with patch('services.requests') as mock_requests:
+    with patch('services.research.requests') as mock_requests:
         # Mock session
         mock_session = Mock()
         mock_requests.Session.return_value = mock_session

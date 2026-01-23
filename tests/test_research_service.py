@@ -14,11 +14,11 @@ class TestResearchService:
 
     def test_format_research_context_basic(self, mock_research_data):
         """Test formatting research context with basic data."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
             context = svc.format_research_context(mock_research_data)
 
@@ -30,11 +30,11 @@ class TestResearchService:
 
     def test_format_research_context_with_yc_data(self, mock_research_data, mock_yc_company_data):
         """Test formatting research context with YC Bookface data."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
             context = svc.format_research_context(mock_research_data, yc_data=mock_yc_company_data)
 
@@ -45,11 +45,11 @@ class TestResearchService:
 
     def test_format_research_context_with_relationship_data(self, mock_research_data, mock_relationship_data):
         """Test formatting research context with relationship data from emails."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
             context = svc.format_research_context(
                 mock_research_data,
@@ -64,11 +64,11 @@ class TestResearchService:
 
     def test_format_research_context_empty_data(self):
         """Test formatting with minimal data."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
 
             empty_research = {
@@ -91,11 +91,11 @@ class TestResearchService:
 
     def test_clean_text(self):
         """Test text cleaning utility."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
 
             # Test whitespace normalization
@@ -104,11 +104,11 @@ class TestResearchService:
 
     def test_research_company_structure(self):
         """Test that research_company returns correct structure."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
 
             with patch.object(ResearchService, '_crawl_domain', return_value={}):
                 with patch.object(ResearchService, '_deep_search', return_value=[]):
@@ -137,17 +137,17 @@ class TestSerperSearch:
 
     def test_serper_search_returns_results(self, mock_search_results):
         """Test that Serper search returns formatted results."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.post') as mock_post:
+            with patch('services.research.requests.post') as mock_post:
                 mock_post.return_value = Mock(
                     status_code=200,
                     json=Mock(return_value={'organic': mock_search_results})
                 )
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 results = svc._serper_search('Forithmus company')
 
@@ -157,11 +157,11 @@ class TestSerperSearch:
 
     def test_serper_search_no_api_key(self):
         """Test that search returns empty when no API key."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
             results = svc._deep_search('TestCo', 'test.com')
 
@@ -169,14 +169,14 @@ class TestSerperSearch:
 
     def test_serper_search_handles_error(self):
         """Test that search handles API errors gracefully."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.post') as mock_post:
+            with patch('services.research.requests.post') as mock_post:
                 mock_post.side_effect = Exception("API Error")
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 results = svc._serper_search('test query')
 
@@ -188,11 +188,11 @@ class TestDomainCrawling:
 
     def test_crawl_domain_returns_dict(self):
         """Test that crawl_domain returns a dictionary."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
 
             # Even with network issues, should return a dict
@@ -203,11 +203,11 @@ class TestDomainCrawling:
 
     def test_crawl_domain_no_domain(self):
         """Test crawling with empty domain."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
             result = svc._crawl_domain('')
 
@@ -215,16 +215,16 @@ class TestDomainCrawling:
 
     def test_crawl_domain_handles_timeout(self):
         """Test that crawling handles timeouts gracefully."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.Session') as mock_session_class:
+            with patch('services.research.requests.Session') as mock_session_class:
                 mock_session = Mock()
                 mock_session_class.return_value = mock_session
                 mock_session.get.side_effect = Exception("Connection timeout")
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 result = svc._crawl_domain('timeout.com')
 
@@ -237,11 +237,11 @@ class TestDeepSearch:
 
     def test_deep_search_runs_multiple_queries(self):
         """Test that deep search runs multiple search queries."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.post') as mock_post:
+            with patch('services.research.requests.post') as mock_post:
                 mock_post.return_value = Mock(
                     status_code=200,
                     json=Mock(return_value={'organic': [
@@ -249,7 +249,7 @@ class TestDeepSearch:
                     ]})
                 )
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 results = svc._deep_search('TestCo', 'test.com')
 
@@ -259,17 +259,17 @@ class TestDeepSearch:
 
     def test_deep_search_with_yc_source(self):
         """Test deep search includes YC-specific queries for YC companies."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.post') as mock_post:
+            with patch('services.research.requests.post') as mock_post:
                 mock_post.return_value = Mock(
                     status_code=200,
                     json=Mock(return_value={'organic': []})
                 )
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 svc._deep_search('Cofia', '', source='W26')
 
@@ -284,11 +284,11 @@ class TestDeepSearch:
 
     def test_deep_search_deduplicates_results(self):
         """Test that deep search removes duplicate URLs."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = 'test-key'
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.post') as mock_post:
+            with patch('services.research.requests.post') as mock_post:
                 # Return same result from multiple queries
                 mock_post.return_value = Mock(
                     status_code=200,
@@ -297,7 +297,7 @@ class TestDeepSearch:
                     ]})
                 )
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 results = svc._deep_search('TestCo', 'test.com')
 
@@ -311,11 +311,11 @@ class TestExternalPageScraping:
 
     def test_scrape_external_pages_returns_dict(self):
         """Test that scrape_external_pages returns a dictionary."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
 
             search_results = [
@@ -332,11 +332,11 @@ class TestExternalPageScraping:
 
     def test_scrape_external_pages_skips_company_domain(self):
         """Test that scraping skips the company's own domain."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            from services import ResearchService
+            from services.research import ResearchService
             svc = ResearchService()
 
             search_results = [
@@ -355,16 +355,16 @@ class TestExternalPageScraping:
 
     def test_scrape_external_pages_handles_errors(self):
         """Test that scraping handles page errors gracefully."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.Session') as mock_session_class:
+            with patch('services.research.requests.Session') as mock_session_class:
                 mock_session = Mock()
                 mock_session_class.return_value = mock_session
                 mock_session.get.side_effect = Exception("Connection error")
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
 
                 search_results = [
@@ -377,11 +377,11 @@ class TestExternalPageScraping:
 
     def test_scrape_external_pages_respects_limit(self):
         """Test that scraping respects MAX_EXTERNAL_PAGES limit."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.Session') as mock_session_class:
+            with patch('services.research.requests.Session') as mock_session_class:
                 mock_session = Mock()
                 mock_session_class.return_value = mock_session
 
@@ -391,7 +391,7 @@ class TestExternalPageScraping:
                 mock_response.text = '<html><body>Content</body></html>'
                 mock_session.get.return_value = mock_response
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
 
                 # Create many search results
@@ -411,11 +411,11 @@ class TestSitemapParsing:
 
     def test_get_sitemap_urls_basic(self):
         """Test parsing sitemap.xml."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.Session') as mock_session_class:
+            with patch('services.research.requests.Session') as mock_session_class:
                 mock_session = Mock()
                 mock_session_class.return_value = mock_session
 
@@ -429,7 +429,7 @@ class TestSitemapParsing:
                 </urlset>'''
                 mock_session.get.return_value = mock_response
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 urls = svc._get_sitemap_urls('test.com')
 
@@ -439,11 +439,11 @@ class TestSitemapParsing:
 
     def test_get_sitemap_urls_not_found(self):
         """Test handling missing sitemap."""
-        with patch('services.config') as mock_config:
+        with patch('services.research.config') as mock_config:
             mock_config.serper_api_key = ''
             mock_config.linkedin_cookie = ''
 
-            with patch('services.requests.Session') as mock_session_class:
+            with patch('services.research.requests.Session') as mock_session_class:
                 mock_session = Mock()
                 mock_session_class.return_value = mock_session
 
@@ -451,7 +451,7 @@ class TestSitemapParsing:
                 mock_response.status_code = 404
                 mock_session.get.return_value = mock_response
 
-                from services import ResearchService
+                from services.research import ResearchService
                 svc = ResearchService()
                 urls = svc._get_sitemap_urls('test.com')
 

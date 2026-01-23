@@ -6,17 +6,23 @@ Automated investment memo generation for venture capital deal flow, powered by G
 
 Keel is a Google Cloud Run service that:
 - Reads company data from a Google Sheet
+- Performs deep web research on each company
 - Generates structured investment memos using Google Gemini via Vertex AI
 - Creates organized folders and documents in Google Drive
 - Ensures idempotent processing with Firestore
+- Provides an email-based interface for commands
 
 ## Features
 
-- **Automated Processing**: Trigger via HTTP endpoint or Cloud Scheduler
+- **Automated Processing**: Trigger via HTTP endpoint, email, or Cloud Scheduler
+- **Deep Research**: Crawls company websites, search results, and external sources
 - **AI-Generated Content**: Google Gemini creates crisp, professional VC-style memos
+- **Email Agent**: Add companies, regenerate memos, and analyze email threads via email
 - **Google Workspace Integration**: Seamless integration with Sheets, Drive, and Docs
 - **Idempotent Design**: Prevents duplicate processing using Firestore
 - **Shared Drive Support**: Full support for Google Shared Drives
+- **YC Bookface Integration**: Import companies from Y Combinator batches
+- **Relationship Tracking**: Analyze forwarded email threads to build relationship timelines
 - **Structured Logging**: Detailed logs for monitoring and debugging
 - **Production Ready**: Designed for Cloud Run with proper error handling and retries
 
@@ -49,16 +55,11 @@ Keel is a Google Cloud Run service that:
 Create your Google Workspace resources:
 
 1. **Google Sheet** with "Index" tab:
-   | Company | Domain | Status |
-   |---------|--------|--------|
-   | Acme Inc | acme.com | New |
+   | Company | Domain | Status | Source |
+   |---------|--------|--------|--------|
+   | Acme Inc | acme.com | New | |
 
-2. **Google Docs Template** with placeholders:
-   - `{{COMPANY}}`, `{{DOMAIN}}`, `{{EXEC_SUMMARY}}`
-   - `{{TEAM}}`, `{{PRODUCT}}`, `{{MARKET}}`
-   - `{{TRACTION}}`, `{{RISKS}}`, `{{QUESTIONS}}`, `{{RECOMMENDATION}}`
-
-3. **Shared Drive Folder** for storing generated memos
+2. **Shared Drive Folder** for storing generated memos
 
 ## Usage
 
@@ -67,6 +68,15 @@ Create your Google Workspace resources:
 ```bash
 curl -X POST https://your-service-url.run.app/run
 ```
+
+### Email Commands
+
+Send emails to the configured email address:
+- "Add [Company] ([domain])" - Add a new company
+- "Generate memos" - Process unprocessed companies
+- "Regenerate [company/domain]" - Regenerate a specific memo
+- "Scrape YC W26" - Import companies from YC batch
+- Forward email threads - Build relationship timelines
 
 ### Response Format
 
@@ -94,9 +104,11 @@ curl -X POST https://your-service-url.run.app/run
 ```
 Google Sheet (Index) → Cloud Run Service → Google Drive (Folders + Docs)
                               ↓
-                         Firestore (Idempotency)
+                      Deep Web Research
                               ↓
-                         Vertex AI Gemini (Content Generation)
+                      Vertex AI Gemini (Content Generation)
+                              ↓
+                      Firestore (Idempotency + Relationships)
 ```
 
 ### Processing Flow
@@ -104,11 +116,12 @@ Google Sheet (Index) → Cloud Run Service → Google Drive (Folders + Docs)
 1. Read companies from Sheet where Status is empty or "New"
 2. Check Firestore to skip already-processed domains
 3. Create company folder in Shared Drive
-4. Copy template document into folder
-5. Generate memo content with Google Gemini
-6. Update document with generated content
-7. Mark as processed in Firestore
-8. Update Sheet status to "Memo Created"
+4. Create blank "Initial Brief" document
+5. Crawl company website and perform web searches
+6. Generate memo content with Google Gemini using research context
+7. Insert formatted content into document
+8. Mark as processed in Firestore
+9. Update Sheet status to "Memo Created"
 
 ## Development
 
@@ -121,9 +134,14 @@ export GOOGLE_APPLICATION_CREDENTIALS="path/to/service-account-key.json"
 export GCP_PROJECT_ID="your-project-id"
 export SPREADSHEET_ID="your-sheet-id"
 export DRIVE_PARENT_FOLDER_ID="your-folder-id"
-export TEMPLATE_DOC_ID="your-template-id"
 
 python main.py
+```
+
+### Run Tests
+
+```bash
+source venv/bin/activate && pytest
 ```
 
 ### Docker Build
@@ -138,13 +156,22 @@ docker run -p 8080:8080 -e GCP_PROJECT_ID="..." keel-memo-generator
 ```
 keel/
 ├── main.py              # Flask app and orchestration
-├── services.py          # Business logic (Sheets, Drive, Docs, Gemini, Firestore)
+├── services/            # Business logic modules
+│   ├── __init__.py      # Re-exports all service classes
+│   ├── sheets.py        # Google Sheets operations
+│   ├── firestore.py     # Idempotency tracking
+│   ├── drive.py         # Google Drive operations
+│   ├── docs.py          # Google Docs operations
+│   ├── gemini.py        # Gemini content generation
+│   ├── research.py      # Deep web research
+│   ├── bookface.py      # YC Bookface scraping
+│   └── email_agent.py   # Email command processing
 ├── config.py            # Configuration management
 ├── requirements.txt     # Python dependencies
-├── Dockerfile          # Container configuration
-├── DEPLOY.md           # Deployment guide
-├── CLAUDE.md           # Development guidance
-└── README.md           # This file
+├── Dockerfile           # Container configuration
+├── DEPLOY.md            # Deployment guide
+├── CLAUDE.md            # Development guidance
+└── README.md            # This file
 ```
 
 ## Monitoring
