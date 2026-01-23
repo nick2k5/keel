@@ -1,9 +1,11 @@
 """Main application for processing investment memos."""
+import json
 import logging
 import sys
 from flask import Flask, request, jsonify
 from google.oauth2 import service_account
 from google.auth import default
+from google.cloud import secretmanager
 from config import config
 from services import (
     SheetsService,
@@ -45,6 +47,41 @@ def get_credentials(include_gmail: bool = False):
     # Use default credentials (service account in Cloud Run)
     credentials, project = default(scopes=scopes)
     return credentials
+
+
+def get_gmail_credentials(user_email: str):
+    """Get Gmail credentials with domain-wide delegation.
+
+    This loads a dedicated service account from Secret Manager that has
+    domain-wide delegation enabled for Gmail API access.
+
+    Args:
+        user_email: Email address to impersonate via delegation
+
+    Returns:
+        Credentials with delegation to the specified user
+    """
+    try:
+        # Load service account key from Secret Manager
+        client = secretmanager.SecretManagerServiceClient()
+        secret_name = f"projects/{config.project_id}/secrets/keel-gmail-credentials/versions/latest"
+        response = client.access_secret_version(request={"name": secret_name})
+        key_data = json.loads(response.payload.data.decode('UTF-8'))
+
+        # Create credentials with Gmail scope and delegation
+        scopes = ['https://www.googleapis.com/auth/gmail.readonly']
+        credentials = service_account.Credentials.from_service_account_info(
+            key_data,
+            scopes=scopes,
+            subject=user_email  # Impersonate this user via domain-wide delegation
+        )
+
+        logger.info(f"Loaded Gmail credentials with delegation to {user_email}")
+        return credentials
+
+    except Exception as e:
+        logger.error(f"Error loading Gmail credentials: {e}", exc_info=True)
+        raise
 
 
 def process_company(row: dict, sheets_service, firestore_service, drive_service,
@@ -250,14 +287,8 @@ def sync_inbox():
                 'message': 'user_email is required for Gmail API access'
             }), 400
 
-        # Initialize credentials with Gmail scope
-        credentials = get_credentials(include_gmail=True)
-
-        # Create delegated credentials for the user
-        if hasattr(credentials, 'with_subject'):
-            gmail_credentials = credentials.with_subject(user_email)
-        else:
-            gmail_credentials = credentials
+        # Get Gmail credentials with domain-wide delegation
+        gmail_credentials = get_gmail_credentials(user_email)
 
         # Initialize services
         gmail_service = GmailService(credentials=gmail_credentials, user_email=user_email)
@@ -267,6 +298,8 @@ def sync_inbox():
         email_agent = None
         services = None
         if process_with_agent:
+            # Get regular credentials for other Google services
+            credentials = get_credentials()
             email_agent = EmailAgentService()
             services = {
                 'sheets': SheetsService(credentials),
