@@ -918,8 +918,8 @@ Respond with JSON only, no markdown."""
             if not gmail:
                 return {'success': False, 'error': 'Gmail service not available'}
 
-            # Build Gmail query to search for updates from this company
-            query = f'to:updates@friale.com from:@{resolved_domain}'
+            # Build Gmail query to search for all emails from this company's domain
+            query = f'from:@{resolved_domain}'
 
             logger.info(f"Searching for update emails with query: {query}")
 
@@ -996,43 +996,68 @@ Respond with JSON only, no markdown."""
 
     def _generate_updates_summary(self, emails: List[Dict], company: str, domain: str) -> Dict[str, Any]:
         """Use Gemini to generate a summary of update emails."""
-        # Format emails for the prompt
-        emails_text = "\n\n---\n\n".join([
-            f"Date: {e.get('date', 'Unknown')}\nSubject: {e.get('subject', 'No subject')}\n\n{e.get('body', '')[:3000]}"
-            for e in emails[-50:]  # Limit to most recent 50 emails
-        ])
+        # Sort emails by date, most recent first
+        sorted_emails = sorted(
+            emails,
+            key=lambda e: e.get('parsed_date') or e.get('date', ''),
+            reverse=True
+        )
 
-        prompt = f"""Analyze these {len(emails)} update emails from {company} ({domain}) and create a comprehensive summary.
+        # Format emails for the prompt - most recent first, with emphasis markers
+        email_sections = []
+        for i, e in enumerate(sorted_emails[:50]):  # Limit to most recent 50 emails
+            recency_label = ""
+            if i == 0:
+                recency_label = "[MOST RECENT - PRIMARY FOCUS] "
+            elif i < 5:
+                recency_label = "[RECENT] "
+            elif i < 15:
+                recency_label = "[OLDER] "
+            else:
+                recency_label = "[HISTORICAL CONTEXT] "
 
-EMAIL UPDATES:
+            email_sections.append(
+                f"{recency_label}Date: {e.get('date', 'Unknown')}\n"
+                f"Subject: {e.get('subject', 'No subject')}\n\n"
+                f"{e.get('body', '')[:3000]}"
+            )
+
+        emails_text = "\n\n---\n\n".join(email_sections)
+
+        prompt = f"""Analyze these {len(emails)} emails from {company} ({domain}) and create a comprehensive summary of how the company is doing.
+
+CRITICAL: Prioritize recent information heavily. The MOST RECENT email should carry the most weight in your analysis - it represents the current state of the company. Older emails provide historical context but should not overshadow recent developments.
+
+EMAILS (ordered from most recent to oldest):
 {emails_text[:30000]}
 
 Create a JSON response with:
 {{
-  "summary": "2-3 paragraph executive summary of how the company is doing based on these updates",
+  "summary": "2-3 paragraph executive summary focused primarily on the MOST RECENT updates. What is the company's current status? What have they accomplished recently? Use older emails only to provide context on trajectory and history.",
+  "current_status": "1-2 sentence summary of where the company stands RIGHT NOW based on the most recent email(s)",
   "highlights": [
-    "Key highlight or achievement 1",
-    "Key highlight or achievement 2",
+    "Most important recent highlight or achievement",
+    "Second most important recent highlight",
     "..."
   ],
   "product_updates": [
-    "Product or feature update 1",
+    "Recent product or feature update 1",
     "..."
   ],
   "business_updates": [
-    "Business metric, funding, hiring, or partnership update 1",
+    "Recent business metric, funding, hiring, or partnership update 1",
     "..."
   ],
   "themes": ["recurring theme 1", "theme 2"],
   "sentiment": "positive/neutral/negative/mixed",
   "trajectory": "growing/stable/declining/unclear",
   "notable_metrics": [
-    {{"metric": "Revenue", "value": "$X", "context": "optional context"}},
+    {{"metric": "Revenue", "value": "$X", "context": "optional context", "date": "when reported"}},
     ...
   ]
 }}
 
-Focus on extracting concrete facts, metrics, and achievements. Be specific.
+Focus on extracting concrete facts, metrics, and achievements. Prioritize recency. Be specific.
 Respond with JSON only, no markdown."""
 
         try:
@@ -1069,6 +1094,7 @@ Respond with JSON only, no markdown."""
     def _format_updates_summary_content(self, company: str, domain: str, emails: List[Dict],
                                         summary: Dict[str, Any], first_date: str, last_date: str) -> str:
         """Format the updates summary document content."""
+        current_status = summary.get('current_status', '')
         highlights = '\n'.join(f"- {h}" for h in summary.get('highlights', [])) or "None identified"
         product_updates = '\n'.join(f"- {u}" for u in summary.get('product_updates', [])) or "None identified"
         business_updates = '\n'.join(f"- {u}" for u in summary.get('business_updates', [])) or "None identified"
@@ -1086,6 +1112,11 @@ Respond with JSON only, no markdown."""
         else:
             metrics_text = "None identified"
 
+        # Add current status section if available
+        current_status_section = ""
+        if current_status:
+            current_status_section = f"\n## Current Status\n{current_status}\n"
+
         content = f"""# Updates Summary: {company}
 
 ## Overview
@@ -1094,7 +1125,7 @@ Respond with JSON only, no markdown."""
 - **Date Range:** {first_date} to {last_date}
 - **Overall Sentiment:** {summary.get('sentiment', 'Unknown').title()}
 - **Trajectory:** {summary.get('trajectory', 'Unknown').title()}
-
+{current_status_section}
 ## Executive Summary
 {summary.get('summary', 'No summary available')}
 

@@ -1358,10 +1358,12 @@ class TestSummarizeUpdates:
 
                     # Should have resolved domain from sheet
                     assert result['domain'] == 'stripe.com'
-                    # Gmail was called with the resolved domain
+                    # Gmail was called with the resolved domain (searches entire inbox)
                     mock_gmail.fetch_emails.assert_called_once()
                     call_args = mock_gmail.fetch_emails.call_args
-                    assert 'stripe.com' in call_args.kwargs.get('query', '')
+                    query = call_args.kwargs.get('query', '')
+                    assert 'from:@stripe.com' in query
+                    assert 'to:updates' not in query  # Should search entire inbox
 
     def test_summarize_updates_no_emails(self, mock_services):
         """Test graceful handling when no update emails found."""
