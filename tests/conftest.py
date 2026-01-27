@@ -298,15 +298,26 @@ def mock_gemini_service(mock_generated_memo):
 
 
 @pytest.fixture
+def mock_gmail_service():
+    """Mock GmailService."""
+    mock = Mock()
+    mock.user_email = 'nick@friale.com'
+    mock.fetch_emails.return_value = []
+    mock.fetch_thread.return_value = []
+    return mock
+
+
+@pytest.fixture
 def mock_services(mock_sheets_service, mock_firestore_service, mock_drive_service,
-                  mock_docs_service, mock_gemini_service):
+                  mock_docs_service, mock_gemini_service, mock_gmail_service):
     """Combined mock services dictionary."""
     return {
         'sheets': mock_sheets_service,
         'firestore': mock_firestore_service,
         'drive': mock_drive_service,
         'docs': mock_docs_service,
-        'gemini': mock_gemini_service
+        'gemini': mock_gemini_service,
+        'gmail': mock_gmail_service
     }
 
 

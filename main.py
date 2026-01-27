@@ -244,6 +244,14 @@ def process_email():
             'docs': DocsService(credentials)
         }
 
+        # Add Gmail service for SUMMARIZE_UPDATES action
+        try:
+            gmail_credentials = get_gmail_credentials('nick@friale.com')
+            services['gmail'] = GmailService(credentials=gmail_credentials, user_email='nick@friale.com')
+        except Exception as e:
+            logger.warning(f"Could not initialize Gmail service: {e}")
+            # Continue without Gmail - will fail gracefully if SUMMARIZE_UPDATES is requested
+
         # Process email with AI agent
         email_agent = EmailAgentService()
         result = email_agent.process_email(email_data, services)

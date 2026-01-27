@@ -36,6 +36,9 @@ class EmailAgentService:
         'ANALYZE_THREAD': {
             'description': 'Analyze a forwarded email thread to create a relationship timeline and summary. Use when email contains forwarded messages (look for "Forwarded message", "From:", date patterns, or quoted content).'
         },
+        'SUMMARIZE_UPDATES': {
+            'description': 'Summarize update emails from a company. Use when asked "how is [company] doing?", "summarize updates from [company/domain]", or "[company] updates".'
+        },
         'SCRAPE_YC': {
             'description': 'Scrape YC Bookface for companies in a specific batch and add them to the sheet. Default batch is W26.'
         },
@@ -129,6 +132,12 @@ This should be: UPDATE_COMPANY with {{"company": "HCA", "new_domain": "hcahealth
 **ADD_COMPANY:**
 - Use ONLY for adding NEW companies (not corrections)
 - Parameters: {{"company": "Company Name", "domain": "example.com"}}
+- Common pattern: Subject says "add company" and the body contains the company name (possibly with domain)
+- Example: Subject "add company", Body "Good Day" → ADD_COMPANY with {{"company": "Good Day", "domain": ""}}
+- Example: Subject "add company", Body "Stripe (stripe.com)" → ADD_COMPANY with {{"company": "Stripe", "domain": "stripe.com"}}
+- CRITICAL: Extract company name from the MAIN body text, NOT from email signatures
+- Email signatures appear after "-- " or at the very end with sender's title/company
+- The sender's own company in their signature is NOT the company to add
 
 **GENERATE_MEMOS:**
 - Use for: "run memos", "generate", "generate memos", "process"
@@ -142,12 +151,29 @@ This should be: UPDATE_COMPANY with {{"company": "HCA", "new_domain": "hcahealth
 - Use for FORWARDED email threads (look for "Forwarded message", multiple From:/Date: headers)
 - No parameters needed
 
+**SUMMARIZE_UPDATES:**
+- Use for: "how is [company] doing?", "summarize updates from [company]", "[company] updates", "what's new with [company]"
+- Parameters: {{"company": "Company Name", "domain": "optional.domain.com"}}
+- Example: "How is Stripe doing?" → {{"company": "Stripe"}}
+- Example: "Summarize updates from stripe.com" → {{"domain": "stripe.com"}}
+
 **SCRAPE_YC:**
 - Use for: "scrape YC", "import YC batch", "get W26 companies"
 - Parameters: {{"batch": "W26", "pages": 3}}
 
 **HEALTH_CHECK:**
 - Use for: "status", "health", "check"
+
+**NONE:**
+- Use when the request is truly unclear or ambiguous
+- Use when no actionable command is found
+
+**CRITICAL - Email Signature Detection:**
+- Signatures typically start with "-- " or appear at the very end with job titles
+- Pattern: "Name\\nTitle, Company" at the end = signature, NOT the company to add
+- Example signature to IGNORE: "Nick Alexander\\nManaging Partner & Co-Founder, Friale"
+- The text BEFORE the signature is the actual message content
+- Extract company names from the message content, NOT the signature
 
 Be helpful. When in doubt about whether something is a correction vs new addition, check if Keel previously mentioned that company in the thread."""
 
@@ -221,6 +247,13 @@ Be helpful. When in doubt about whether something is a correction vs new additio
             if not email_body:
                 return {'success': False, 'error': 'No email body to analyze'}
             result = self._analyze_thread(email_body, services)
+
+        elif action == 'SUMMARIZE_UPDATES':
+            company = parameters.get('company', '')
+            domain = parameters.get('domain', '')
+            if not company and not domain:
+                return {'success': False, 'error': 'Missing company name or domain'}
+            result = self._summarize_company_updates(company, domain, services)
 
         elif action == 'SCRAPE_YC':
             batch = parameters.get('batch', 'W26')
@@ -844,6 +877,247 @@ Respond with JSON only, no markdown."""
             logger.error(f"Error scraping YC batch: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
+    def _summarize_company_updates(self, company: str, domain: str, services: Dict) -> Dict[str, Any]:
+        """Summarize update emails from a company.
+
+        Args:
+            company: Company name (optional if domain provided)
+            domain: Company domain (optional if company provided)
+            services: Dict of service instances (must include 'gmail', 'sheets', 'drive', 'docs', 'gemini')
+        """
+        try:
+            # Resolve domain from company name if needed
+            resolved_domain = domain
+            resolved_company = company
+
+            if not resolved_domain and company:
+                # Look up company in sheet to get domain
+                sheets = services['sheets']
+                companies = sheets.get_all_companies()
+
+                for c in companies:
+                    if c.get('company', '').lower() == company.lower():
+                        resolved_domain = c.get('domain', '')
+                        resolved_company = c.get('company', company)
+                        break
+
+                # If still no domain, try company.com as fallback
+                if not resolved_domain:
+                    resolved_domain = f"{company.lower().replace(' ', '')}.com"
+
+            if not resolved_domain:
+                return {'success': False, 'error': 'Could not determine company domain'}
+
+            # Clean domain
+            resolved_domain = re.sub(r'^https?://', '', resolved_domain.lower().strip())
+            resolved_domain = re.sub(r'^www\.', '', resolved_domain)
+            resolved_domain = re.sub(r'/.*$', '', resolved_domain)
+
+            # Check if gmail service is available
+            gmail = services.get('gmail')
+            if not gmail:
+                return {'success': False, 'error': 'Gmail service not available'}
+
+            # Build Gmail query to search for updates from this company
+            query = f'to:updates@friale.com from:@{resolved_domain}'
+
+            logger.info(f"Searching for update emails with query: {query}")
+
+            # Fetch emails via Gmail API
+            emails = gmail.fetch_emails(
+                query=query,
+                max_results=100
+            )
+
+            if not emails:
+                return {
+                    'success': True,
+                    'company': resolved_company,
+                    'domain': resolved_domain,
+                    'email_count': 0,
+                    'summary': f'No update emails found from {resolved_domain}',
+                    'doc_id': None
+                }
+
+            # Sort emails by date (oldest first for timeline)
+            emails.sort(key=lambda e: e.get('parsed_date') or e.get('date', ''))
+
+            # Get date range
+            first_date = emails[0].get('date', 'Unknown')
+            last_date = emails[-1].get('date', 'Unknown')
+
+            # Generate summary with Gemini
+            summary_result = self._generate_updates_summary(emails, resolved_company, resolved_domain)
+
+            # Create or update the summary document
+            drive = services['drive']
+            docs = services['docs']
+
+            # Find or create company folder
+            folder_id = drive.find_existing_folder(resolved_company, resolved_domain)
+            if not folder_id:
+                folder_id = drive.create_folder(resolved_company, resolved_domain)
+
+            # Create "Updates Summary" document
+            doc_metadata = drive.service.files().create(
+                body={
+                    'name': 'Updates Summary',
+                    'mimeType': 'application/vnd.google-apps.document',
+                    'parents': [folder_id]
+                },
+                supportsAllDrives=True,
+                fields='id'
+            ).execute()
+
+            doc_id = doc_metadata['id']
+
+            # Format and insert content
+            content = self._format_updates_summary_content(
+                resolved_company, resolved_domain, emails, summary_result, first_date, last_date
+            )
+            docs.insert_text(doc_id, content)
+
+            logger.info(f"Created updates summary for {resolved_company} ({resolved_domain}): {len(emails)} emails")
+
+            return {
+                'success': True,
+                'company': resolved_company,
+                'domain': resolved_domain,
+                'email_count': len(emails),
+                'date_range': {'first': first_date, 'last': last_date},
+                'summary': summary_result.get('summary', ''),
+                'highlights': summary_result.get('highlights', []),
+                'doc_id': doc_id
+            }
+
+        except Exception as e:
+            logger.error(f"Error summarizing company updates: {e}", exc_info=True)
+            return {'success': False, 'error': str(e)}
+
+    def _generate_updates_summary(self, emails: List[Dict], company: str, domain: str) -> Dict[str, Any]:
+        """Use Gemini to generate a summary of update emails."""
+        # Format emails for the prompt
+        emails_text = "\n\n---\n\n".join([
+            f"Date: {e.get('date', 'Unknown')}\nSubject: {e.get('subject', 'No subject')}\n\n{e.get('body', '')[:3000]}"
+            for e in emails[-50:]  # Limit to most recent 50 emails
+        ])
+
+        prompt = f"""Analyze these {len(emails)} update emails from {company} ({domain}) and create a comprehensive summary.
+
+EMAIL UPDATES:
+{emails_text[:30000]}
+
+Create a JSON response with:
+{{
+  "summary": "2-3 paragraph executive summary of how the company is doing based on these updates",
+  "highlights": [
+    "Key highlight or achievement 1",
+    "Key highlight or achievement 2",
+    "..."
+  ],
+  "product_updates": [
+    "Product or feature update 1",
+    "..."
+  ],
+  "business_updates": [
+    "Business metric, funding, hiring, or partnership update 1",
+    "..."
+  ],
+  "themes": ["recurring theme 1", "theme 2"],
+  "sentiment": "positive/neutral/negative/mixed",
+  "trajectory": "growing/stable/declining/unclear",
+  "notable_metrics": [
+    {{"metric": "Revenue", "value": "$X", "context": "optional context"}},
+    ...
+  ]
+}}
+
+Focus on extracting concrete facts, metrics, and achievements. Be specific.
+Respond with JSON only, no markdown."""
+
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config={
+                    "max_output_tokens": 4000,
+                    "temperature": 0.2,
+                }
+            )
+
+            content = response.text.strip()
+            # Clean markdown if present
+            if content.startswith('```'):
+                content = re.sub(r'```json?\n?', '', content)
+                content = re.sub(r'```', '', content)
+                content = content.strip()
+
+            return json.loads(content)
+
+        except Exception as e:
+            logger.error(f"Error generating updates summary: {e}")
+            return {
+                'summary': f'Error analyzing updates: {str(e)}',
+                'highlights': [],
+                'product_updates': [],
+                'business_updates': [],
+                'themes': [],
+                'sentiment': 'unknown',
+                'trajectory': 'unclear',
+                'notable_metrics': []
+            }
+
+    def _format_updates_summary_content(self, company: str, domain: str, emails: List[Dict],
+                                        summary: Dict[str, Any], first_date: str, last_date: str) -> str:
+        """Format the updates summary document content."""
+        highlights = '\n'.join(f"- {h}" for h in summary.get('highlights', [])) or "None identified"
+        product_updates = '\n'.join(f"- {u}" for u in summary.get('product_updates', [])) or "None identified"
+        business_updates = '\n'.join(f"- {u}" for u in summary.get('business_updates', [])) or "None identified"
+        themes = ', '.join(summary.get('themes', [])) or "None identified"
+
+        metrics_text = ""
+        if summary.get('notable_metrics'):
+            metrics_lines = []
+            for m in summary['notable_metrics']:
+                line = f"- **{m.get('metric', 'Unknown')}:** {m.get('value', 'N/A')}"
+                if m.get('context'):
+                    line += f" ({m.get('context')})"
+                metrics_lines.append(line)
+            metrics_text = '\n'.join(metrics_lines)
+        else:
+            metrics_text = "None identified"
+
+        content = f"""# Updates Summary: {company}
+
+## Overview
+- **Domain:** {domain}
+- **Emails Analyzed:** {len(emails)}
+- **Date Range:** {first_date} to {last_date}
+- **Overall Sentiment:** {summary.get('sentiment', 'Unknown').title()}
+- **Trajectory:** {summary.get('trajectory', 'Unknown').title()}
+
+## Executive Summary
+{summary.get('summary', 'No summary available')}
+
+## Key Highlights
+{highlights}
+
+## Product & Feature Updates
+{product_updates}
+
+## Business Updates
+{business_updates}
+
+## Notable Metrics
+{metrics_text}
+
+## Recurring Themes
+{themes}
+
+---
+*Generated from {len(emails)} update emails*
+"""
+        return content
+
     def _process_single_company(self, row: Dict, sheets, firestore_svc, drive, gemini, docs) -> Dict:
         """Process a single company row."""
         company = row['company']
@@ -1034,6 +1308,42 @@ Let me know if you need any other changes."""
 **Full timeline:** {doc_url}
 
 Forward more threads to add to this relationship history."""
+
+        elif action == 'SUMMARIZE_UPDATES':
+            company = result.get('company', 'Unknown')
+            domain = result.get('domain', '')
+            email_count = result.get('email_count', 0)
+
+            if email_count == 0:
+                return f"""No update emails found from **{company}** ({domain}).
+
+Make sure the company sends updates to updates@friale.com."""
+
+            doc_url = f"https://docs.google.com/document/d/{result.get('doc_id')}/edit"
+            date_range = result.get('date_range', {})
+            summary = result.get('summary', '')
+
+            # Truncate summary for email if too long
+            if len(summary) > 600:
+                summary = summary[:600] + '...'
+
+            # Format highlights
+            highlights = result.get('highlights', [])
+            highlights_text = ""
+            if highlights:
+                highlights_text = "\n**Highlights:**\n" + '\n'.join(f"- {h}" for h in highlights[:5])
+
+            return f"""✓ **Updates Summary: {company}**
+
+**Domain:** {domain}
+**Emails analyzed:** {email_count}
+**Date range:** {date_range.get('first', 'Unknown')} to {date_range.get('last', 'Unknown')}
+
+**Summary:**
+{summary}
+{highlights_text}
+
+**Full report:** {doc_url}"""
 
         elif action == 'SCRAPE_YC':
             batch = result.get('batch', 'W26')

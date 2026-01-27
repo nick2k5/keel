@@ -192,6 +192,7 @@ class TestActionDetection:
                         'UPDATE_COMPANY',
                         'REGENERATE_MEMO',
                         'ANALYZE_THREAD',
+                        'SUMMARIZE_UPDATES',
                         'SCRAPE_YC',
                         'HEALTH_CHECK',
                         'NONE'
@@ -200,6 +201,21 @@ class TestActionDetection:
                     for action in expected_actions:
                         assert action in svc.ACTIONS
                         assert 'description' in svc.ACTIONS[action]
+
+    def test_summarize_updates_action_defined(self):
+        """Test that SUMMARIZE_UPDATES action is properly defined."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    assert 'SUMMARIZE_UPDATES' in svc.ACTIONS
+                    assert 'how is' in svc.ACTIONS['SUMMARIZE_UPDATES']['description'].lower()
 
 
 class TestUpdateCompanyAction:
@@ -1247,6 +1263,231 @@ class TestGenerateRelationshipAnalysis:
                     # Should return default values on error
                     assert result['company_name'] == 'test.com'
                     assert 'Error' in result['summary']
+
+
+class TestSummarizeUpdates:
+    """Tests for SUMMARIZE_UPDATES action."""
+
+    def test_execute_summarize_updates(self, mock_services):
+        """Test executing SUMMARIZE_UPDATES action."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Add mock gmail service
+                    mock_gmail = Mock()
+                    mock_gmail.fetch_emails.return_value = [
+                        {
+                            'id': 'email-1',
+                            'from': 'updates@stripe.com',
+                            'subject': 'Stripe Monthly Update - January',
+                            'date': 'Mon, 15 Jan 2024 10:00:00 -0800',
+                            'parsed_date': None,
+                            'body': 'This month we launched new features...'
+                        },
+                        {
+                            'id': 'email-2',
+                            'from': 'newsletter@stripe.com',
+                            'subject': 'Stripe Monthly Update - February',
+                            'date': 'Thu, 15 Feb 2024 10:00:00 -0800',
+                            'parsed_date': None,
+                            'body': 'February was a great month...'
+                        }
+                    ]
+                    mock_services['gmail'] = mock_gmail
+
+                    # Mock drive service for document creation
+                    mock_services['drive'].find_existing_folder.return_value = 'folder-123'
+                    mock_services['drive'].service = Mock()
+                    mock_services['drive'].service.files.return_value.create.return_value.execute.return_value = {'id': 'doc-123'}
+
+                    svc = EmailAgentService()
+
+                    # Mock the summary generation
+                    with patch.object(svc, '_generate_updates_summary') as mock_gen:
+                        mock_gen.return_value = {
+                            'summary': 'Stripe is growing rapidly with new features',
+                            'highlights': ['Launched new API', 'Expanded to 5 new countries'],
+                            'product_updates': ['New billing features'],
+                            'business_updates': ['Revenue up 20%'],
+                            'themes': ['Growth', 'Expansion'],
+                            'sentiment': 'positive',
+                            'trajectory': 'growing',
+                            'notable_metrics': []
+                        }
+
+                        decision = {
+                            'action': 'SUMMARIZE_UPDATES',
+                            'parameters': {'company': 'Stripe', 'domain': 'stripe.com'}
+                        }
+
+                        result = svc._execute_action(decision, mock_services)
+
+                        assert result['success'] is True
+                        assert result['domain'] == 'stripe.com'
+                        assert result['email_count'] == 2
+                        mock_gmail.fetch_emails.assert_called_once()
+
+    def test_summarize_updates_domain_resolution(self, mock_services):
+        """Test that company name is resolved to domain from sheet."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Mock sheet lookup
+                    mock_services['sheets'].get_all_companies.return_value = [
+                        {'company': 'Stripe', 'domain': 'stripe.com', 'row_number': 2}
+                    ]
+
+                    # Add mock gmail service
+                    mock_gmail = Mock()
+                    mock_gmail.fetch_emails.return_value = []
+                    mock_services['gmail'] = mock_gmail
+
+                    svc = EmailAgentService()
+
+                    result = svc._summarize_company_updates('Stripe', '', mock_services)
+
+                    # Should have resolved domain from sheet
+                    assert result['domain'] == 'stripe.com'
+                    # Gmail was called with the resolved domain
+                    mock_gmail.fetch_emails.assert_called_once()
+                    call_args = mock_gmail.fetch_emails.call_args
+                    assert 'stripe.com' in call_args.kwargs.get('query', '')
+
+    def test_summarize_updates_no_emails(self, mock_services):
+        """Test graceful handling when no update emails found."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Add mock gmail service that returns no emails
+                    mock_gmail = Mock()
+                    mock_gmail.fetch_emails.return_value = []
+                    mock_services['gmail'] = mock_gmail
+
+                    svc = EmailAgentService()
+
+                    result = svc._summarize_company_updates('Unknown', 'unknown.com', mock_services)
+
+                    assert result['success'] is True
+                    assert result['email_count'] == 0
+                    assert result['doc_id'] is None
+                    assert 'No update emails found' in result['summary']
+
+    def test_summarize_updates_no_gmail_service(self, mock_services):
+        """Test error when Gmail service is not available."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Ensure no gmail service
+                    if 'gmail' in mock_services:
+                        del mock_services['gmail']
+
+                    svc = EmailAgentService()
+
+                    result = svc._summarize_company_updates('Stripe', 'stripe.com', mock_services)
+
+                    assert result['success'] is False
+                    assert 'Gmail service not available' in result['error']
+
+    def test_summarize_updates_missing_params(self, mock_services):
+        """Test error when both company and domain are missing."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {
+                        'action': 'SUMMARIZE_UPDATES',
+                        'parameters': {}  # Missing company and domain
+                    }
+
+                    result = svc._execute_action(decision, mock_services)
+
+                    assert result['success'] is False
+                    assert 'missing' in result['error'].lower()
+
+    def test_format_response_summarize_updates(self, mock_services):
+        """Test response formatting for SUMMARIZE_UPDATES action."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {'action': 'SUMMARIZE_UPDATES', 'reasoning': 'User asked how Stripe is doing'}
+                    result = {
+                        'success': True,
+                        'company': 'Stripe',
+                        'domain': 'stripe.com',
+                        'email_count': 12,
+                        'date_range': {'first': 'Jan 1, 2024', 'last': 'Mar 15, 2024'},
+                        'summary': 'Stripe is doing great with 20% growth',
+                        'highlights': ['Launched new API', 'Expanded globally'],
+                        'doc_id': 'doc-123'
+                    }
+
+                    response = svc._format_response(decision, result)
+
+                    assert 'Stripe' in response
+                    assert 'stripe.com' in response
+                    assert '12' in response
+                    assert 'doc-123' in response
+                    assert 'Highlights' in response
+
+    def test_format_response_summarize_updates_no_emails(self, mock_services):
+        """Test response formatting when no update emails found."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    svc = EmailAgentService()
+
+                    decision = {'action': 'SUMMARIZE_UPDATES', 'reasoning': 'User asked'}
+                    result = {
+                        'success': True,
+                        'company': 'Unknown Co',
+                        'domain': 'unknown.com',
+                        'email_count': 0,
+                        'summary': 'No update emails found',
+                        'doc_id': None
+                    }
+
+                    response = svc._format_response(decision, result)
+
+                    assert 'No update emails found' in response
+                    assert 'Unknown Co' in response
 
 
 class TestProcessSingleCompany:
