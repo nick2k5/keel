@@ -1592,3 +1592,272 @@ class TestProcessSingleCompany:
 
                     assert result['status'] == 'error'
                     assert 'Drive error' in result['error']
+
+
+class TestDomainResolution:
+    """Tests for _resolve_company_domain method."""
+
+    def test_resolve_domain_from_sheet(self, mock_services):
+        """Test resolving domain from spreadsheet."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Sheet contains "Stark Bank" with domain "starkbank.com"
+                    mock_services['sheets'].get_all_companies.return_value = [
+                        {'company': 'Stark Bank', 'domain': 'starkbank.com', 'row_number': 2}
+                    ]
+
+                    svc = EmailAgentService()
+
+                    domain, company = svc._resolve_company_domain('Stark Bank', mock_services)
+
+                    assert domain == 'starkbank.com'
+                    assert company == 'Stark Bank'
+
+    def test_resolve_domain_from_gmail(self, mock_services):
+        """Test resolving domain from Gmail when not in spreadsheet."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''  # No web search
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Not in spreadsheet
+                    mock_services['sheets'].get_all_companies.return_value = []
+
+                    # But found in Gmail
+                    mock_gmail = Mock()
+                    mock_gmail.fetch_emails.return_value = [
+                        {'from': 'Rafael Stark <rafael@starkbank.com>', 'subject': 'Update'},
+                        {'from': 'updates@starkbank.com', 'subject': 'Newsletter'},
+                        {'from': 'support@starkbank.com', 'subject': 'Help'},
+                    ]
+                    mock_services['gmail'] = mock_gmail
+
+                    svc = EmailAgentService()
+
+                    domain, company = svc._resolve_company_domain('Stark Bank', mock_services)
+
+                    assert domain == 'starkbank.com'
+                    mock_gmail.fetch_emails.assert_called_once()
+
+    def test_resolve_domain_from_web_search(self, mock_services):
+        """Test resolving domain from web search when not in sheet or Gmail."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = 'test-key'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    with patch('services.email_agent.requests') as mock_requests:
+                        from services.email_agent import EmailAgentService
+
+                        # Not in spreadsheet
+                        mock_services['sheets'].get_all_companies.return_value = []
+
+                        # Gmail returns no useful results
+                        mock_gmail = Mock()
+                        mock_gmail.fetch_emails.return_value = []
+                        mock_services['gmail'] = mock_gmail
+
+                        # Web search finds the company
+                        mock_response = Mock()
+                        mock_response.status_code = 200
+                        mock_response.json.return_value = {
+                            'organic': [
+                                {
+                                    'title': 'Stark Bank - Digital Banking',
+                                    'link': 'https://starkbank.com/',
+                                    'snippet': 'Stark Bank is a digital bank...'
+                                }
+                            ]
+                        }
+                        mock_requests.post.return_value = mock_response
+
+                        svc = EmailAgentService()
+
+                        domain, company = svc._resolve_company_domain('Stark Bank', mock_services)
+
+                        assert domain == 'starkbank.com'
+                        mock_requests.post.assert_called_once()
+
+    def test_resolve_domain_fallback(self, mock_services):
+        """Test fallback to {company}.com when nothing found."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''  # No web search
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Not in spreadsheet
+                    mock_services['sheets'].get_all_companies.return_value = []
+
+                    # Gmail returns no useful results
+                    mock_gmail = Mock()
+                    mock_gmail.fetch_emails.return_value = []
+                    mock_services['gmail'] = mock_gmail
+
+                    svc = EmailAgentService()
+
+                    domain, company = svc._resolve_company_domain('Stark Bank', mock_services)
+
+                    # Falls back to companyname.com (spaces removed)
+                    assert domain == 'starkbank.com'
+                    assert company == 'Stark Bank'
+
+    def test_resolve_domain_gmail_filters_common_providers(self, mock_services):
+        """Test that Gmail search filters out common email providers."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = ''
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    from services.email_agent import EmailAgentService
+
+                    # Not in spreadsheet
+                    mock_services['sheets'].get_all_companies.return_value = []
+
+                    # Gmail returns mostly common providers, but one company domain
+                    mock_gmail = Mock()
+                    mock_gmail.fetch_emails.return_value = [
+                        {'from': 'john@gmail.com', 'subject': 'Re: Stark Bank'},
+                        {'from': 'jane@yahoo.com', 'subject': 'Stark Bank intro'},
+                        {'from': 'support@starkbank.com', 'subject': 'Welcome'},
+                    ]
+                    mock_services['gmail'] = mock_gmail
+
+                    svc = EmailAgentService()
+
+                    domain, company = svc._resolve_company_domain('Stark Bank', mock_services)
+
+                    # Should find starkbank.com, filtering out gmail and yahoo
+                    assert domain == 'starkbank.com'
+
+    def test_resolve_domain_web_search_skips_social_media(self, mock_services):
+        """Test that web search skips social media and directory sites."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = 'test-key'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    with patch('services.email_agent.requests') as mock_requests:
+                        from services.email_agent import EmailAgentService
+
+                        # Not in spreadsheet or Gmail
+                        mock_services['sheets'].get_all_companies.return_value = []
+                        mock_gmail = Mock()
+                        mock_gmail.fetch_emails.return_value = []
+                        mock_services['gmail'] = mock_gmail
+
+                        # Web search returns LinkedIn first, then company site
+                        mock_response = Mock()
+                        mock_response.status_code = 200
+                        mock_response.json.return_value = {
+                            'organic': [
+                                {
+                                    'title': 'Stark Bank | LinkedIn',
+                                    'link': 'https://linkedin.com/company/starkbank',
+                                    'snippet': 'Company page'
+                                },
+                                {
+                                    'title': 'Stark Bank - Crunchbase',
+                                    'link': 'https://crunchbase.com/organization/starkbank',
+                                    'snippet': 'Company profile'
+                                },
+                                {
+                                    'title': 'Stark Bank - Digital Banking',
+                                    'link': 'https://www.starkbank.com/',
+                                    'snippet': 'Official website'
+                                }
+                            ]
+                        }
+                        mock_requests.post.return_value = mock_response
+
+                        svc = EmailAgentService()
+
+                        domain, company = svc._resolve_company_domain('Stark Bank', mock_services)
+
+                        # Should skip LinkedIn and Crunchbase, return actual company domain
+                        assert domain == 'starkbank.com'
+
+    def test_summarize_updates_uses_smart_resolution(self, mock_services):
+        """Test that _summarize_company_updates uses the smart domain resolution."""
+        with patch('services.email_agent.config') as mock_config:
+            mock_config.project_id = 'test-project'
+            mock_config.vertex_ai_region = 'us-central1'
+            mock_config.serper_api_key = 'test-key'
+
+            with patch('services.email_agent.vertexai'):
+                with patch('services.email_agent.GenerativeModel'):
+                    with patch('services.email_agent.requests') as mock_requests:
+                        from services.email_agent import EmailAgentService
+
+                        # Not in spreadsheet
+                        mock_services['sheets'].get_all_companies.return_value = []
+
+                        # Gmail search for company name finds emails
+                        mock_gmail = Mock()
+                        # First call: domain resolution search
+                        # Second call: fetching update emails
+                        mock_gmail.fetch_emails.side_effect = [
+                            # Domain resolution search
+                            [{'from': 'updates@starkbank.com', 'subject': 'Update'}],
+                            # Actual update emails fetch
+                            [
+                                {
+                                    'id': 'email-1',
+                                    'from': 'updates@starkbank.com',
+                                    'subject': 'Monthly Update',
+                                    'date': 'Mon, 15 Jan 2024',
+                                    'parsed_date': None,
+                                    'body': 'Here are our updates...'
+                                }
+                            ]
+                        ]
+                        mock_services['gmail'] = mock_gmail
+
+                        # Mock drive service for document creation
+                        mock_services['drive'].find_existing_folder.return_value = 'folder-123'
+                        mock_services['drive'].service = Mock()
+                        mock_services['drive'].service.files.return_value.create.return_value.execute.return_value = {'id': 'doc-123'}
+
+                        svc = EmailAgentService()
+
+                        # Mock the summary generation
+                        with patch.object(svc, '_generate_updates_summary') as mock_gen:
+                            mock_gen.return_value = {
+                                'summary': 'Stark Bank is doing well',
+                                'highlights': [],
+                                'product_updates': [],
+                                'business_updates': [],
+                                'themes': [],
+                                'sentiment': 'positive',
+                                'trajectory': 'growing',
+                                'notable_metrics': []
+                            }
+
+                            # Call with company name only (no domain)
+                            result = svc._summarize_company_updates('Stark Bank', '', mock_services)
+
+                            # Should have resolved domain through smart resolution
+                            assert result['success'] is True
+                            assert result['domain'] == 'starkbank.com'
+                            # Gmail should have been called twice: once for resolution, once for updates
+                            assert mock_gmail.fetch_emails.call_count == 2

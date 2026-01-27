@@ -10,6 +10,7 @@ from vertexai.generative_models import GenerativeModel
 from google.cloud import firestore as firestore_module
 from config import config
 
+import requests
 from services.research import ResearchService
 from services.bookface import BookfaceService
 
@@ -877,6 +878,195 @@ Respond with JSON only, no markdown."""
             logger.error(f"Error scraping YC batch: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
 
+    def _resolve_company_domain(self, company: str, services: Dict) -> tuple:
+        """Resolve company name to domain using multiple strategies.
+
+        Strategies (in order):
+        1. Look up in spreadsheet
+        2. Search Gmail for emails mentioning/from company
+        3. Web search for company website
+        4. Fallback to {company}.com
+
+        Args:
+            company: Company name to resolve
+            services: Dict of service instances (must include 'sheets', optionally 'gmail')
+
+        Returns:
+            tuple: (resolved_domain, resolved_company_name)
+        """
+        resolved_domain = None
+        resolved_company = company
+
+        # Strategy 1: Look up in spreadsheet
+        sheets = services.get('sheets')
+        if sheets:
+            try:
+                companies = sheets.get_all_companies()
+                for c in companies:
+                    if c.get('company', '').lower() == company.lower():
+                        resolved_domain = c.get('domain', '')
+                        resolved_company = c.get('company', company)
+                        if resolved_domain:
+                            logger.info(f"Resolved {company} to {resolved_domain} from spreadsheet")
+                            return (resolved_domain, resolved_company)
+                        break
+            except Exception as e:
+                logger.warning(f"Error looking up company in sheet: {e}")
+
+        # Strategy 2: Search Gmail for emails from/mentioning the company
+        gmail = services.get('gmail')
+        if gmail:
+            try:
+                domain_from_gmail = self._resolve_domain_from_gmail(company, gmail)
+                if domain_from_gmail:
+                    logger.info(f"Resolved {company} to {domain_from_gmail} from Gmail search")
+                    return (domain_from_gmail, resolved_company)
+            except Exception as e:
+                logger.warning(f"Error searching Gmail for domain: {e}")
+
+        # Strategy 3: Web search for company website
+        if config.serper_api_key:
+            try:
+                domain_from_web = self._resolve_domain_from_web_search(company)
+                if domain_from_web:
+                    logger.info(f"Resolved {company} to {domain_from_web} from web search")
+                    return (domain_from_web, resolved_company)
+            except Exception as e:
+                logger.warning(f"Error with web search for domain: {e}")
+
+        # Strategy 4: Fallback to {company}.com
+        fallback_domain = f"{company.lower().replace(' ', '')}.com"
+        logger.info(f"Falling back to {fallback_domain} for {company}")
+        return (fallback_domain, resolved_company)
+
+    def _resolve_domain_from_gmail(self, company: str, gmail) -> Optional[str]:
+        """Search Gmail for emails mentioning/from a company and extract sender domain.
+
+        Args:
+            company: Company name to search for
+            gmail: Gmail service instance
+
+        Returns:
+            Most common external domain found, or None
+        """
+        # Common email providers to filter out
+        common_providers = {
+            'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+            'googlemail.com', 'icloud.com', 'me.com', 'aol.com',
+            'protonmail.com', 'mail.com', 'live.com', 'msn.com'
+        }
+        # Internal domains to filter out
+        internal_domains = {'friale.com'}
+
+        # Search for company name in emails
+        query = f'"{company}"'
+        emails = gmail.fetch_emails(query=query, max_results=30)
+
+        if not emails:
+            return None
+
+        # Extract sender domains
+        domain_counts = Counter()
+        for email in emails:
+            from_addr = email.get('from', '')
+            # Extract email address
+            email_match = re.search(r'[\w\.-]+@([\w\.-]+)', from_addr)
+            if email_match:
+                domain = email_match.group(1).lower()
+                # Filter out common providers and internal domains
+                if domain not in common_providers and domain not in internal_domains:
+                    # Check if domain might be related to the company
+                    # (contains part of the company name)
+                    company_parts = company.lower().split()
+                    domain_base = domain.split('.')[0]
+                    if any(part in domain_base or domain_base in part for part in company_parts if len(part) > 2):
+                        domain_counts[domain] += 2  # Boost if name matches
+                    else:
+                        domain_counts[domain] += 1
+
+        if domain_counts:
+            # Return most common domain
+            most_common = domain_counts.most_common(1)[0][0]
+            return most_common
+
+        return None
+
+    def _resolve_domain_from_web_search(self, company: str) -> Optional[str]:
+        """Search the web for a company's official website.
+
+        Args:
+            company: Company name to search for
+
+        Returns:
+            Company domain if found, or None
+        """
+        try:
+            # Search for company official website
+            resp = requests.post(
+                'https://google.serper.dev/search',
+                headers={
+                    'X-API-KEY': config.serper_api_key,
+                    'Content-Type': 'application/json'
+                },
+                json={'q': f'{company} official website', 'num': 5},
+                timeout=10
+            )
+
+            if resp.status_code != 200:
+                return None
+
+            data = resp.json()
+            organic = data.get('organic', [])
+
+            if not organic:
+                return None
+
+            # Look for the company's official site in results
+            company_lower = company.lower().replace(' ', '')
+            company_parts = company.lower().split()
+
+            for result in organic:
+                url = result.get('link', '')
+                if not url:
+                    continue
+
+                # Parse domain from URL
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                domain = parsed.netloc.lower()
+
+                # Remove www prefix
+                if domain.startswith('www.'):
+                    domain = domain[4:]
+
+                # Skip social media, directories, and news sites
+                skip_domains = {
+                    'linkedin.com', 'facebook.com', 'twitter.com', 'instagram.com',
+                    'youtube.com', 'crunchbase.com', 'bloomberg.com', 'forbes.com',
+                    'techcrunch.com', 'wikipedia.org', 'yelp.com', 'bbb.org',
+                    'glassdoor.com', 'indeed.com', 'zoominfo.com', 'dnb.com',
+                    'pitchbook.com', 'owler.com', 'g2.com', 'capterra.com',
+                    'ycombinator.com', 'producthunt.com'
+                }
+                if any(skip in domain for skip in skip_domains):
+                    continue
+
+                # Check if domain seems related to company name
+                domain_base = domain.split('.')[0]
+                if any(part in domain_base for part in company_parts if len(part) > 2):
+                    return domain
+
+                # Also accept if first result looks like an official company site
+                title = result.get('title', '').lower()
+                if company.lower() in title and ('official' in title or result == organic[0]):
+                    return domain
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Web search error: {e}")
+            return None
+
     def _summarize_company_updates(self, company: str, domain: str, services: Dict) -> Dict[str, Any]:
         """Summarize update emails from a company.
 
@@ -891,19 +1081,8 @@ Respond with JSON only, no markdown."""
             resolved_company = company
 
             if not resolved_domain and company:
-                # Look up company in sheet to get domain
-                sheets = services['sheets']
-                companies = sheets.get_all_companies()
-
-                for c in companies:
-                    if c.get('company', '').lower() == company.lower():
-                        resolved_domain = c.get('domain', '')
-                        resolved_company = c.get('company', company)
-                        break
-
-                # If still no domain, try company.com as fallback
-                if not resolved_domain:
-                    resolved_domain = f"{company.lower().replace(' ', '')}.com"
+                # Use smarter multi-strategy domain resolution
+                resolved_domain, resolved_company = self._resolve_company_domain(company, services)
 
             if not resolved_domain:
                 return {'success': False, 'error': 'Could not determine company domain'}
