@@ -1097,16 +1097,31 @@ Respond with JSON only, no markdown."""
             if not gmail:
                 return {'success': False, 'error': 'Gmail service not available'}
 
-            # Build Gmail query to search for all emails from this company's domain
-            query = f'from:@{resolved_domain}'
+            # Try multiple query strategies to find emails from this company
+            emails = []
+            queries_tried = []
 
-            logger.info(f"Searching for update emails with query: {query}")
+            # Strategy 1: from:@domain (emails from anyone at the domain)
+            query1 = f'from:@{resolved_domain}'
+            queries_tried.append(query1)
+            logger.info(f"Searching for update emails with query: {query1}")
+            emails = gmail.fetch_emails(query=query1, max_results=100)
 
-            # Fetch emails via Gmail API
-            emails = gmail.fetch_emails(
-                query=query,
-                max_results=100
-            )
+            # Strategy 2: from:domain (alternative syntax)
+            if not emails:
+                query2 = f'from:{resolved_domain}'
+                queries_tried.append(query2)
+                logger.info(f"No results, trying alternative query: {query2}")
+                emails = gmail.fetch_emails(query=query2, max_results=100)
+
+            # Strategy 3: Search for domain anywhere in email (from, to, cc, body)
+            if not emails:
+                query3 = resolved_domain
+                queries_tried.append(query3)
+                logger.info(f"No results, trying broad query: {query3}")
+                emails = gmail.fetch_emails(query=query3, max_results=100)
+
+            logger.info(f"Queries tried: {queries_tried}, found {len(emails)} emails")
 
             if not emails:
                 return {
