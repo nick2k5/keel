@@ -9,12 +9,12 @@ Keel is a Google Cloud Run service that automates investment memo generation for
 ## Architecture
 
 ### Core Flow
-1. **Sheet Processing** (`services/sheets.py:SheetsService`) - Reads "Index" tab, identifies rows where Status is empty or "New"
-2. **Idempotency Check** (`services/firestore.py:FirestoreService`) - Uses Firestore with normalized domain as key to prevent duplicate processing
-3. **Drive Operations** (`services/drive.py:DriveService`) - Creates folder and blank document (requires `supportsAllDrives=true` for Shared Drive)
+1. **Sheet Processing** (`services/google/sheets.py:SheetsService`) - Reads "Index" tab, identifies rows where Status is empty or "New"
+2. **Idempotency Check** (`services/google/firestore.py:FirestoreService`) - Uses Firestore with normalized domain as key to prevent duplicate processing
+3. **Drive Operations** (`services/google/drive.py:DriveService`) - Creates folder and blank document (requires `supportsAllDrives=true` for Shared Drive)
 4. **Research** (`services/research.py:ResearchService`) - Crawls company website, performs web searches, scrapes external sources
-5. **Content Generation** (`services/gemini.py:GeminiService`) - Calls Vertex AI Gemini API with research context to generate memo content
-6. **Document Update** (`services/docs.py:DocsService`) - Inserts formatted markdown content into the document
+5. **Content Generation** (`services/google/gemini.py:GeminiService`) - Calls Vertex AI Gemini API with research context to generate memo content
+6. **Document Update** (`services/google/docs.py:DocsService`) - Inserts formatted markdown content into the document
 7. **Status Tracking** - Updates Firestore and optionally Sheet status to "Memo Created"
 
 ### Email Agent Flow
@@ -24,6 +24,12 @@ Keel is a Google Cloud Run service that automates investment memo generation for
 4. **Response** - Returns formatted response for email reply
 
 ### Key Design Decisions
+
+**Email Domain Security**: The `/email` endpoint only accepts emails from `@friale.com` senders. All other domains are rejected with 403 Forbidden. This is enforced in `main.py` before any processing occurs.
+
+**ServiceFactory Pattern**: All Google services are instantiated via `ServiceFactory.create().create_all()` which returns a dict of initialized services. This centralizes credential management and makes testing easier.
+
+**Action-Based Architecture**: Business logic is encapsulated in action classes (`actions/*.py`). Each action inherits from `BaseAction` and implements `execute()` and `format_response()`. The `EmailAgentService` routes emails to the appropriate action via `EmailRouter`.
 
 **Shared Drive Support**: All Drive API calls include `supportsAllDrives=true`. Without this parameter, operations on Shared Drive resources will fail with 404 errors.
 
@@ -55,10 +61,10 @@ curl -X POST http://localhost:8080/run
 # Health check
 curl http://localhost:8080/health
 
-# Email agent (simulated)
+# Email agent (must be from @friale.com)
 curl -X POST http://localhost:8080/email \
   -H "Content-Type: application/json" \
-  -d '{"from":"user@example.com","subject":"Add company","body":"Add Acme Inc (acme.com)"}'
+  -d '{"from":"nick@friale.com","subject":"Add company","body":"Add Acme Inc (acme.com)"}'
 ```
 
 ### Build and Test Docker Image
@@ -107,18 +113,34 @@ curl -X POST ${SERVICE_URL}/run
 ## File Structure
 
 - `main.py` - Flask application with `/run`, `/email`, `/sync-inbox`, and `/health` endpoints
-- `services/` - Service modules package
-  - `__init__.py` - Re-exports all service classes for backward compatibility
-  - `sheets.py` - SheetsService for Google Sheets operations
-  - `firestore.py` - FirestoreService for idempotency tracking
-  - `drive.py` - DriveService for folder/document creation
-  - `docs.py` - DocsService for document content insertion
-  - `gemini.py` - GeminiService for Gemini-powered memo generation
+- `config.py` - Configuration management, environment variables, Secret Manager integration
+- `actions/` - Business logic actions (one class per action)
+  - `__init__.py` - ACTIONS registry and exports
+  - `base.py` - BaseAction class that all actions inherit from
+  - `add_company.py` - AddCompanyAction
+  - `analyze_thread.py` - AnalyzeThreadAction for relationship timeline extraction
+  - `generate_memos.py` - GenerateMemosAction for batch memo generation
+  - `health_check.py` - HealthCheckAction
+  - `regenerate_memo.py` - RegenerateMemoAction
+  - `scrape_yc.py` - ScrapeYCAction for YC Bookface imports
+  - `summarize_updates.py` - SummarizeUpdatesAction for email digests
+  - `update_company.py` - UpdateCompanyAction
+- `core/` - Core infrastructure
+  - `email_router.py` - EmailRouter for routing emails to actions via Gemini
+- `services/` - Service layer
+  - `__init__.py` - ServiceFactory and re-exports for backward compatibility
+  - `email_agent.py` - EmailAgentService (thin wrapper that delegates to actions)
   - `research.py` - ResearchService for deep web research
   - `bookface.py` - BookfaceService for YC Bookface scraping
-  - `email_agent.py` - EmailAgentService for email-based commands
-  - `gmail.py` - GmailService and InboxSyncService for Gmail API integration
-- `config.py` - Configuration management, environment variables, Secret Manager integration
+  - `google/` - Google API services
+    - `credentials.py` - Credential management and ServiceFactory
+    - `sheets.py` - SheetsService for Google Sheets operations
+    - `firestore.py` - FirestoreService for idempotency tracking
+    - `drive.py` - DriveService for folder/document creation
+    - `docs.py` - DocsService for document content insertion
+    - `gemini.py` - GeminiService for Gemini-powered content generation
+    - `gmail.py` - GmailService and InboxSyncService for Gmail API
+- `tests/` - Test suite (pytest)
 - `requirements.txt` - Python dependencies
 - `Dockerfile` - Container configuration for Cloud Run
 - `DEPLOY.md` - Comprehensive deployment guide with IAM, APIs, and Cloud Scheduler setup
@@ -127,25 +149,26 @@ curl -X POST ${SERVICE_URL}/run
 
 ### Adding New Memo Fields
 
-Update `services/gemini.py:GeminiService.generate_memo()` prompt to request the new field. The document is created blank and content is inserted directly as formatted markdown.
+Update `services/google/gemini.py:GeminiService.generate_memo()` prompt to request the new field. The document is created blank and content is inserted directly as formatted markdown.
 
 ### Changing Processing Logic
 
-Main processing loop is in `main.py:run_processing()`. Each company is processed sequentially by `process_company()`. For parallel processing, consider using Cloud Tasks or Cloud Run Jobs.
+Memo generation logic is in `actions/generate_memos.py:GenerateMemosAction`. The `/run` endpoint instantiates this action via `ServiceFactory`. For parallel processing, consider using Cloud Tasks or Cloud Run Jobs.
 
 ### Modifying Idempotency Key
 
-Change `services/firestore.py:FirestoreService.normalize_domain()` to use a different key format (e.g., include company name).
+Change `services/google/firestore.py:FirestoreService.normalize_domain()` to use a different key format (e.g., include company name).
 
 ### Adjusting Sheet Columns
 
-Update `services/sheets.py:SheetsService.get_rows_to_process()` to parse different columns or ranges.
+Update `services/google/sheets.py:SheetsService.get_rows_to_process()` to parse different columns or ranges.
 
 ### Adding Email Agent Actions
 
-1. Add the action to `EmailAgentService.ACTIONS` dict
-2. Add execution logic in `EmailAgentService._execute_action()`
-3. Add response formatting in `EmailAgentService._format_response()`
+1. Create a new action class in `actions/` inheriting from `BaseAction`
+2. Implement `execute(self, params: dict) -> dict` with business logic
+3. Implement `format_response(self, result: dict) -> str` for email reply text
+4. Register the action in `actions/__init__.py` ACTIONS dict with name, description, and class
 
 ## Environment Variables
 
