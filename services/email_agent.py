@@ -4,6 +4,7 @@ import logging
 import re
 from typing import Dict, List, Optional, Any
 from collections import Counter
+import requests
 
 import vertexai
 from vertexai.generative_models import GenerativeModel

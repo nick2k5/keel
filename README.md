@@ -207,3 +207,9 @@ gcloud run services logs tail keel-memo-generator --region us-central1
 ## Support
 
 For issues and questions, see [DEPLOY.md](DEPLOY.md) troubleshooting section.
+
+
+## Testing
+```bash
+source venv/bin/activate && pytest --cov=services --cov-report=term-missing
+```
