@@ -10,7 +10,6 @@ from vertexai.generative_models import GenerativeModel
 from google.cloud import firestore as firestore_module
 from config import config
 
-import requests
 from services.research import ResearchService
 from services.bookface import BookfaceService
 
@@ -419,7 +418,7 @@ Be helpful. When in doubt about whether something is a correction vs new additio
             # Get relationship data from forwarded emails
             relationship_data = firestore_svc.get_relationship_data(domain=clean_domain, company_name=company)
 
-            # Research the company (pass source for YC-enhanced search)
+            # Research the company
             research_svc = ResearchService()
             research = research_svc.research_company(company, clean_domain, source=source)
             research_context = research_svc.format_research_context(
@@ -940,23 +939,33 @@ Respond with JSON only, no markdown."""
         return (fallback_domain, resolved_company)
 
     def _resolve_domain_from_gmail(self, company: str, gmail) -> Optional[str]:
-        """Search Gmail for emails mentioning/from a company and extract sender domain.
+        """Search Gmail for emails FROM a company and extract sender domain.
+
+        Uses LLM to verify the sender is actually from the target company.
 
         Args:
             company: Company name to search for
             gmail: Gmail service instance
 
         Returns:
-            Most common external domain found, or None
+            Company domain if found with high confidence, or None
         """
-        # Common email providers to filter out
-        common_providers = {
+        # Domains to always exclude (services, providers, internal)
+        excluded_domains = {
+            # Email providers
             'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
             'googlemail.com', 'icloud.com', 'me.com', 'aol.com',
-            'protonmail.com', 'mail.com', 'live.com', 'msn.com'
+            'protonmail.com', 'mail.com', 'live.com', 'msn.com',
+            # Google services
+            'google.com', 'docs.google.com', 'drive.google.com',
+            'calendar.google.com', 'meet.google.com', 'groups.google.com',
+            # Other services
+            'linkedin.com', 'twitter.com', 'facebook.com', 'slack.com',
+            'notion.so', 'calendly.com', 'zoom.us', 'docusign.com',
+            'dropbox.com', 'figma.com', 'github.com', 'atlassian.com',
+            # Internal
+            'friale.com'
         }
-        # Internal domains to filter out
-        internal_domains = {'friale.com'}
 
         # Search for company name in emails
         query = f'"{company}"'
@@ -965,29 +974,64 @@ Respond with JSON only, no markdown."""
         if not emails:
             return None
 
-        # Extract sender domains
-        domain_counts = Counter()
-        for email in emails:
-            from_addr = email.get('from', '')
-            # Extract email address
-            email_match = re.search(r'[\w\.-]+@([\w\.-]+)', from_addr)
-            if email_match:
-                domain = email_match.group(1).lower()
-                # Filter out common providers and internal domains
-                if domain not in common_providers and domain not in internal_domains:
-                    # Check if domain might be related to the company
-                    # (contains part of the company name)
-                    company_parts = company.lower().split()
-                    domain_base = domain.split('.')[0]
-                    if any(part in domain_base or domain_base in part for part in company_parts if len(part) > 2):
-                        domain_counts[domain] += 2  # Boost if name matches
-                    else:
-                        domain_counts[domain] += 1
+        # Use LLM to find emails actually FROM the company
+        email_summaries = []
+        for i, email in enumerate(emails[:20]):
+            from_addr = email.get('from', 'Unknown')
+            subject = email.get('subject', 'No subject')
+            email_summaries.append(f"[{i}] FROM: {from_addr} | SUBJECT: {subject}")
 
-        if domain_counts:
-            # Return most common domain
-            most_common = domain_counts.most_common(1)[0][0]
-            return most_common
+        emails_text = "\n".join(email_summaries)
+
+        prompt = f"""Given these emails, identify which ones are actually FROM someone who works at {company}.
+
+EMAILS:
+{emails_text}
+
+I need to find {company}'s email domain. Which emails (if any) are FROM an employee or founder of {company}?
+
+Respond with JSON:
+{{"from_company_indices": [0, 3], "likely_domain": "company.com"}}
+
+If none are from {company}, respond:
+{{"from_company_indices": [], "likely_domain": null}}
+
+JSON only:"""
+
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config={
+                    "max_output_tokens": 200,
+                    "temperature": 0.1,
+                }
+            )
+
+            content = response.text.strip()
+            if content.startswith('```'):
+                content = re.sub(r'```json?\n?', '', content)
+                content = re.sub(r'```$', '', content)
+
+            result = json.loads(content)
+            likely_domain = result.get('likely_domain')
+
+            if likely_domain and likely_domain.lower() not in excluded_domains:
+                logger.info(f"LLM identified {company} domain as: {likely_domain}")
+                return likely_domain.lower()
+
+            # Fallback: extract domain from identified emails
+            from_indices = result.get('from_company_indices', [])
+            for i in from_indices:
+                if 0 <= i < len(emails):
+                    from_addr = emails[i].get('from', '')
+                    email_match = re.search(r'[\w\.-]+@([\w\.-]+)', from_addr)
+                    if email_match:
+                        domain = email_match.group(1).lower()
+                        if domain not in excluded_domains:
+                            return domain
+
+        except Exception as e:
+            logger.warning(f"LLM domain resolution failed: {e}")
 
         return None
 
@@ -1101,7 +1145,7 @@ Respond with JSON only, no markdown."""
             emails = []
             queries_tried = []
 
-            # Strategy 1: from:@domain (emails from anyone at the domain)
+            # Strategy 1: from:@domain (emails from anyone at the domain) - most reliable
             query1 = f'from:@{resolved_domain}'
             queries_tried.append(query1)
             logger.info(f"Searching for update emails with query: {query1}")
@@ -1114,12 +1158,20 @@ Respond with JSON only, no markdown."""
                 logger.info(f"No results, trying alternative query: {query2}")
                 emails = gmail.fetch_emails(query=query2, max_results=100)
 
-            # Strategy 3: Search for domain anywhere in email (from, to, cc, body)
+            # Strategy 3: Search for company name in subject/body, then filter with LLM
+            # This catches emails where domain might be different (e.g., founder using personal email)
             if not emails:
-                query3 = resolved_domain
+                query3 = f'"{resolved_company}"'
                 queries_tried.append(query3)
-                logger.info(f"No results, trying broad query: {query3}")
-                emails = gmail.fetch_emails(query=query3, max_results=100)
+                logger.info(f"No results from domain, searching by company name: {query3}")
+                candidate_emails = gmail.fetch_emails(query=query3, max_results=50)
+
+                if candidate_emails:
+                    # Use LLM to filter emails that are actually FROM the company
+                    emails = self._filter_company_emails(
+                        candidate_emails, resolved_company, resolved_domain
+                    )
+                    logger.info(f"LLM filtered {len(candidate_emails)} candidates to {len(emails)} relevant emails")
 
             logger.info(f"Queries tried: {queries_tried}, found {len(emails)} emails")
 
@@ -1187,6 +1239,95 @@ Respond with JSON only, no markdown."""
         except Exception as e:
             logger.error(f"Error summarizing company updates: {e}", exc_info=True)
             return {'success': False, 'error': str(e)}
+
+    def _filter_company_emails(self, emails: List[Dict], company: str, domain: str) -> List[Dict]:
+        """Use LLM to filter emails that are actually FROM the target company.
+
+        This filters out emails that merely MENTION the company vs emails that are
+        actual updates/communications FROM the company's founders or employees.
+
+        Args:
+            emails: List of candidate emails to filter
+            company: Company name to filter for
+            domain: Company domain
+
+        Returns:
+            List of emails that are actually from the company
+        """
+        if not emails:
+            return []
+
+        # Build a compact representation of each email for LLM analysis
+        email_summaries = []
+        for i, email in enumerate(emails[:30]):  # Limit to 30 for token efficiency
+            from_addr = email.get('from', 'Unknown')
+            subject = email.get('subject', 'No subject')
+            body_preview = email.get('body', '')[:500]  # First 500 chars
+
+            email_summaries.append(
+                f"[{i}] FROM: {from_addr}\n"
+                f"SUBJECT: {subject}\n"
+                f"PREVIEW: {body_preview}"
+            )
+
+        emails_text = "\n\n---\n\n".join(email_summaries)
+
+        prompt = f"""Analyze these emails and identify which ones are actually written BY someone FROM {company} ({domain}).
+
+IMPORTANT CRITERIA:
+- Include emails WRITTEN BY founders, employees, or official representatives of {company}
+- Include investor updates, company newsletters, product announcements FROM {company}
+- Include emails where the sender clearly works at or represents {company}
+
+EXCLUDE:
+- Emails that just MENTION {company} but are written by someone else
+- Emails written BY ME (the recipient) about {company}
+- Emails from investors, advisors, or third parties discussing {company}
+- Introduction emails where someone introduces {company} but isn't from the company
+- Internal notes or forwards about {company}
+
+EMAILS:
+{emails_text}
+
+Respond with a JSON array of the email indices that are actually FROM {company}:
+{{"from_company": [0, 3, 5]}}
+
+If none are from the company, respond:
+{{"from_company": []}}
+
+JSON only, no explanation:"""
+
+        try:
+            response = self.model.generate_content(
+                prompt,
+                generation_config={
+                    "max_output_tokens": 200,
+                    "temperature": 0.1,
+                }
+            )
+
+            content = response.text.strip()
+            # Clean markdown if present
+            if content.startswith('```'):
+                content = re.sub(r'```json?\n?', '', content)
+                content = re.sub(r'```$', '', content)
+
+            result = json.loads(content)
+            valid_indices = result.get('from_company', [])
+
+            # Filter emails by valid indices
+            filtered_emails = []
+            for i in valid_indices:
+                if 0 <= i < len(emails):
+                    filtered_emails.append(emails[i])
+
+            logger.info(f"LLM filter: {len(valid_indices)}/{len(email_summaries)} emails are from {company}")
+            return filtered_emails
+
+        except Exception as e:
+            logger.error(f"Error in LLM email filtering: {e}", exc_info=True)
+            # On error, return empty list rather than unfiltered results
+            return []
 
     def _generate_updates_summary(self, emails: List[Dict], company: str, domain: str) -> Dict[str, Any]:
         """Use Gemini to generate a summary of update emails."""
@@ -1368,7 +1509,7 @@ Respond with JSON only, no markdown."""
             # Get relationship data from forwarded emails
             relationship_data = firestore_svc.get_relationship_data(domain=domain, company_name=company)
 
-            # Research the company - pass source for YC-enhanced search
+            # Research the company
             research_svc = ResearchService()
             research = research_svc.research_company(company, domain, source=source)
             research_context = research_svc.format_research_context(

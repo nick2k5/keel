@@ -1,7 +1,12 @@
 """Main application for processing investment memos."""
 import json
 import logging
+import os
 import sys
+
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file
+
 from flask import Flask, request, jsonify
 from google.oauth2 import service_account
 from google.auth import default
