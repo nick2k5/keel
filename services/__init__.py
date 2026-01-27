@@ -15,7 +15,7 @@ from services.google import (
 
 # Other services
 from services.bookface import BookfaceService
-from services.email_agent_new import EmailAgentService
+from services.email_agent import EmailAgentService
 
 # Legacy - keep old ResearchService for backward compatibility during migration
 # TODO: Remove after migration complete

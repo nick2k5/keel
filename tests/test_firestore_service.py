@@ -2,18 +2,20 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
+from services import FirestoreService
+
 
 class TestFirestoreService:
     """Tests for the FirestoreService class."""
 
     def test_normalize_domain(self):
         """Test domain normalization."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client'):
-                from services.firestore import FirestoreService
+            with patch('services.google.firestore.firestore_module.Client'):
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 # Test basic normalization (lowercase and strip)
@@ -23,11 +25,11 @@ class TestFirestoreService:
 
     def test_is_processed_true(self):
         """Test checking if domain is processed."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client') as mock_client:
+            with patch('services.google.firestore.firestore_module.Client') as mock_client:
                 mock_db = Mock()
                 mock_client.return_value = mock_db
 
@@ -35,7 +37,7 @@ class TestFirestoreService:
                 mock_doc.exists = True
                 mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
 
-                from services.firestore import FirestoreService
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 result = svc.is_processed('example.com')
@@ -45,11 +47,11 @@ class TestFirestoreService:
 
     def test_is_processed_false(self):
         """Test checking if domain is not processed."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client') as mock_client:
+            with patch('services.google.firestore.firestore_module.Client') as mock_client:
                 mock_db = Mock()
                 mock_client.return_value = mock_db
 
@@ -57,7 +59,7 @@ class TestFirestoreService:
                 mock_doc.exists = False
                 mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
 
-                from services.firestore import FirestoreService
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 result = svc.is_processed('example.com')
@@ -66,11 +68,11 @@ class TestFirestoreService:
 
     def test_get_yc_company_data_exists(self):
         """Test getting YC company data when it exists."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client') as mock_client:
+            with patch('services.google.firestore.firestore_module.Client') as mock_client:
                 mock_db = Mock()
                 mock_client.return_value = mock_db
 
@@ -84,7 +86,7 @@ class TestFirestoreService:
                 }
                 mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
 
-                from services.firestore import FirestoreService
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 result = svc.get_yc_company_data('Cofia')
@@ -95,11 +97,11 @@ class TestFirestoreService:
 
     def test_get_yc_company_data_not_exists(self):
         """Test getting YC company data when it doesn't exist."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client') as mock_client:
+            with patch('services.google.firestore.firestore_module.Client') as mock_client:
                 mock_db = Mock()
                 mock_client.return_value = mock_db
 
@@ -107,7 +109,7 @@ class TestFirestoreService:
                 mock_doc.exists = False
                 mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
 
-                from services.firestore import FirestoreService
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 result = svc.get_yc_company_data('NonExistent')
@@ -116,11 +118,11 @@ class TestFirestoreService:
 
     def test_get_relationship_data_by_domain(self):
         """Test getting relationship data by domain."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client') as mock_client:
+            with patch('services.google.firestore.firestore_module.Client') as mock_client:
                 mock_db = Mock()
                 mock_client.return_value = mock_db
 
@@ -134,7 +136,7 @@ class TestFirestoreService:
                 }
                 mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
 
-                from services.firestore import FirestoreService
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 result = svc.get_relationship_data(domain='forithmus.com')
@@ -145,11 +147,11 @@ class TestFirestoreService:
 
     def test_get_relationship_data_by_company_name(self):
         """Test getting relationship data by company name (when no domain provided)."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client') as mock_client:
+            with patch('services.google.firestore.firestore_module.Client') as mock_client:
                 mock_db = Mock()
                 mock_client.return_value = mock_db
 
@@ -162,7 +164,7 @@ class TestFirestoreService:
                 }
                 mock_db.collection.return_value.document.return_value.get.return_value = mock_doc_found
 
-                from services.firestore import FirestoreService
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 # Empty domain string is falsy, so it goes straight to company_name lookup
@@ -176,11 +178,11 @@ class TestFirestoreService:
 
     def test_clear_processed_exists(self):
         """Test clearing processed record when it exists."""
-        with patch('services.firestore.config') as mock_config:
+        with patch('services.google.firestore.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.firestore_collection = 'processed_domains'
 
-            with patch('services.firestore.firestore_module.Client') as mock_client:
+            with patch('services.google.firestore.firestore_module.Client') as mock_client:
                 mock_db = Mock()
                 mock_client.return_value = mock_db
 
@@ -190,7 +192,7 @@ class TestFirestoreService:
                 mock_doc_ref.get.return_value = mock_doc
                 mock_db.collection.return_value.document.return_value = mock_doc_ref
 
-                from services.firestore import FirestoreService
+                pass  # FirestoreService imported at module level
                 svc = FirestoreService()
 
                 result = svc.clear_processed('example.com')

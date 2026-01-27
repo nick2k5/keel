@@ -2,18 +2,20 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
+from services import GeminiService
+
 
 class TestGeminiService:
     """Tests for the GeminiService class."""
 
     def test_generate_memo_basic(self):
         """Test basic memo generation."""
-        with patch('services.gemini.config') as mock_config:
+        with patch('services.google.gemini.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.gemini.vertexai') as mock_vertexai:
-                with patch('services.gemini.GenerativeModel') as mock_model_class:
+            with patch('services.google.gemini.vertexai') as mock_vertexai:
+                with patch('services.google.gemini.GenerativeModel') as mock_model_class:
                     mock_model = Mock()
                     mock_model_class.return_value = mock_model
 
@@ -21,7 +23,7 @@ class TestGeminiService:
                     mock_response.text = "# Test Memo\n\nThis is a generated memo."
                     mock_model.generate_content.return_value = mock_response
 
-                    from services.gemini import GeminiService
+                    pass  # GeminiService imported at module level
                     svc = GeminiService()
 
                     result = svc.generate_memo('TestCo', 'test.com')
@@ -31,12 +33,12 @@ class TestGeminiService:
 
     def test_generate_memo_with_research_context(self):
         """Test memo generation with research context."""
-        with patch('services.gemini.config') as mock_config:
+        with patch('services.google.gemini.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.gemini.vertexai'):
-                with patch('services.gemini.GenerativeModel') as mock_model_class:
+            with patch('services.google.gemini.vertexai'):
+                with patch('services.google.gemini.GenerativeModel') as mock_model_class:
                     mock_model = Mock()
                     mock_model_class.return_value = mock_model
 
@@ -44,7 +46,7 @@ class TestGeminiService:
                     mock_response.text = "# Forithmus Research Brief\n\n## Overview\nAI Healthcare company."
                     mock_model.generate_content.return_value = mock_response
 
-                    from services.gemini import GeminiService
+                    pass  # GeminiService imported at module level
                     svc = GeminiService()
 
                     research_context = """
@@ -63,12 +65,12 @@ class TestGeminiService:
 
     def test_generate_memo_with_custom_prompt(self):
         """Test memo generation with custom prompt."""
-        with patch('services.gemini.config') as mock_config:
+        with patch('services.google.gemini.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.gemini.vertexai'):
-                with patch('services.gemini.GenerativeModel') as mock_model_class:
+            with patch('services.google.gemini.vertexai'):
+                with patch('services.google.gemini.GenerativeModel') as mock_model_class:
                     mock_model = Mock()
                     mock_model_class.return_value = mock_model
 
@@ -76,7 +78,7 @@ class TestGeminiService:
                     mock_response.text = "Custom analysis output"
                     mock_model.generate_content.return_value = mock_response
 
-                    from services.gemini import GeminiService
+                    pass  # GeminiService imported at module level
                     svc = GeminiService()
 
                     custom_prompt = "Analyze this company focusing only on their team."
@@ -89,12 +91,12 @@ class TestGeminiService:
 
     def test_generate_memo_no_domain(self):
         """Test memo generation for company without domain."""
-        with patch('services.gemini.config') as mock_config:
+        with patch('services.google.gemini.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.gemini.vertexai'):
-                with patch('services.gemini.GenerativeModel') as mock_model_class:
+            with patch('services.google.gemini.vertexai'):
+                with patch('services.google.gemini.GenerativeModel') as mock_model_class:
                     mock_model = Mock()
                     mock_model_class.return_value = mock_model
 
@@ -102,7 +104,7 @@ class TestGeminiService:
                     mock_response.text = "# Cofia Brief\n\nYC W26 Company"
                     mock_model.generate_content.return_value = mock_response
 
-                    from services.gemini import GeminiService
+                    pass  # GeminiService imported at module level
                     svc = GeminiService()
 
                     result = svc.generate_memo('Cofia', '')
@@ -111,12 +113,12 @@ class TestGeminiService:
 
     def test_generate_memo_handles_empty_response(self):
         """Test handling of empty model response."""
-        with patch('services.gemini.config') as mock_config:
+        with patch('services.google.gemini.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.gemini.vertexai'):
-                with patch('services.gemini.GenerativeModel') as mock_model_class:
+            with patch('services.google.gemini.vertexai'):
+                with patch('services.google.gemini.GenerativeModel') as mock_model_class:
                     mock_model = Mock()
                     mock_model_class.return_value = mock_model
 
@@ -124,7 +126,7 @@ class TestGeminiService:
                     mock_response.text = ""
                     mock_model.generate_content.return_value = mock_response
 
-                    from services.gemini import GeminiService
+                    pass  # GeminiService imported at module level
                     svc = GeminiService()
 
                     result = svc.generate_memo('TestCo', 'test.com')
@@ -133,13 +135,13 @@ class TestGeminiService:
 
     def test_gemini_service_initializes_vertexai(self):
         """Test that GeminiService initializes Vertex AI correctly."""
-        with patch('services.gemini.config') as mock_config:
+        with patch('services.google.gemini.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.gemini.vertexai') as mock_vertexai:
-                with patch('services.gemini.GenerativeModel'):
-                    from services.gemini import GeminiService
+            with patch('services.google.gemini.vertexai') as mock_vertexai:
+                with patch('services.google.gemini.GenerativeModel'):
+                    pass  # GeminiService imported at module level
                     svc = GeminiService()
 
                     mock_vertexai.init.assert_called_once_with(
@@ -149,19 +151,19 @@ class TestGeminiService:
 
     def test_generate_memo_uses_correct_model(self):
         """Test that the correct Gemini model is used."""
-        with patch('services.gemini.config') as mock_config:
+        with patch('services.google.gemini.config') as mock_config:
             mock_config.project_id = 'test-project'
             mock_config.vertex_ai_region = 'us-central1'
 
-            with patch('services.gemini.vertexai'):
-                with patch('services.gemini.GenerativeModel') as mock_model_class:
+            with patch('services.google.gemini.vertexai'):
+                with patch('services.google.gemini.GenerativeModel') as mock_model_class:
                     mock_model = Mock()
                     mock_model_class.return_value = mock_model
                     mock_response = Mock()
                     mock_response.text = "Test"
                     mock_model.generate_content.return_value = mock_response
 
-                    from services.gemini import GeminiService
+                    pass  # GeminiService imported at module level
                     svc = GeminiService()
 
                     # Verify model name contains 'gemini'

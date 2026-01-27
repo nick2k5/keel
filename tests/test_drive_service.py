@@ -2,13 +2,15 @@
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
+from services import DriveService
+
 
 class TestDriveService:
     """Tests for the DriveService class."""
 
     def test_find_existing_folder_found(self):
         """Test finding an existing folder."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -16,7 +18,7 @@ class TestDriveService:
                 'files': [{'id': 'folder-123', 'name': 'Forithmus (forithmus.com)'}]
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
             svc.parent_folder_id = 'parent-folder-id'
 
@@ -26,7 +28,7 @@ class TestDriveService:
 
     def test_find_existing_folder_not_found(self):
         """Test when folder doesn't exist."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -34,7 +36,7 @@ class TestDriveService:
                 'files': []
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
             svc.parent_folder_id = 'parent-folder-id'
 
@@ -44,7 +46,7 @@ class TestDriveService:
 
     def test_find_existing_folder_no_domain(self):
         """Test finding folder for company without domain."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -52,7 +54,7 @@ class TestDriveService:
                 'files': [{'id': 'folder-456', 'name': 'Cofia (no-domain)'}]
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
             svc.parent_folder_id = 'parent-folder-id'
 
@@ -62,7 +64,7 @@ class TestDriveService:
 
     def test_create_folder_new(self):
         """Test creating a new folder."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -75,7 +77,7 @@ class TestDriveService:
                 'id': 'new-folder-id'
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
             svc.parent_folder_id = 'parent-folder-id'
 
@@ -86,7 +88,7 @@ class TestDriveService:
 
     def test_create_folder_already_exists(self):
         """Test create_folder when folder already exists."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -94,7 +96,7 @@ class TestDriveService:
                 'files': [{'id': 'existing-folder-id', 'name': 'Forithmus (forithmus.com)'}]
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
             svc.parent_folder_id = 'parent-folder-id'
 
@@ -105,7 +107,7 @@ class TestDriveService:
 
     def test_find_document_in_folder_found(self):
         """Test finding a document in a folder."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -113,7 +115,7 @@ class TestDriveService:
                 'files': [{'id': 'doc-123', 'name': 'Initial Brief'}]
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
 
             result = svc.find_document_in_folder('folder-123', 'Initial Brief')
@@ -122,7 +124,7 @@ class TestDriveService:
 
     def test_find_document_in_folder_not_found(self):
         """Test when document doesn't exist in folder."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -130,7 +132,7 @@ class TestDriveService:
                 'files': []
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
 
             result = svc.find_document_in_folder('folder-123', 'Initial Brief')
@@ -139,7 +141,7 @@ class TestDriveService:
 
     def test_create_document_new(self):
         """Test creating a new document."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -152,7 +154,7 @@ class TestDriveService:
                 'id': 'new-doc-id'
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
 
             result = svc.create_document('folder-123', 'Forithmus')
@@ -165,7 +167,7 @@ class TestDriveService:
 
     def test_create_document_reuses_existing(self):
         """Test that create_document reuses existing 'Initial Brief' doc."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -173,7 +175,7 @@ class TestDriveService:
                 'files': [{'id': 'existing-doc-id', 'name': 'Initial Brief'}]
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
 
             result = svc.create_document('folder-123', 'Forithmus')
@@ -183,7 +185,7 @@ class TestDriveService:
 
     def test_create_folder_uses_shared_drive_params(self):
         """Test that create_folder includes supportsAllDrives parameter."""
-        with patch('services.drive.build') as mock_build:
+        with patch('services.google.drive.build') as mock_build:
             mock_service = Mock()
             mock_build.return_value = mock_service
 
@@ -194,7 +196,7 @@ class TestDriveService:
                 'id': 'new-folder-id'
             }
 
-            from services.drive import DriveService
+            pass  # DriveService imported at module level
             svc = DriveService(Mock())
             svc.parent_folder_id = 'parent-folder-id'
 

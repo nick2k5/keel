@@ -4,14 +4,14 @@ import pytest
 from unittest.mock import MagicMock, patch, Mock
 from datetime import datetime, timedelta
 
-from services.gmail import GmailService, InboxSyncService
+from services import GmailService, InboxSyncService
 
 
 class TestGmailService:
     """Tests for GmailService class."""
 
-    @patch('services.gmail.build')
-    @patch('services.gmail.default')
+    @patch('services.google.gmail.build')
+    @patch('services.google.gmail.default')
     def test_init_with_default_credentials(self, mock_default, mock_build):
         """Test initialization with default credentials."""
         mock_creds = MagicMock()
@@ -23,7 +23,7 @@ class TestGmailService:
         mock_build.assert_called_once_with('gmail', 'v1', credentials=mock_creds)
         assert service.user_email is None
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_init_with_provided_credentials(self, mock_build):
         """Test initialization with provided credentials."""
         mock_creds = MagicMock(spec=[])  # No with_subject attribute
@@ -33,7 +33,7 @@ class TestGmailService:
         mock_build.assert_called_once_with('gmail', 'v1', credentials=mock_creds)
         assert service.user_email == 'test@example.com'
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_init_with_delegation(self, mock_build):
         """Test initialization with domain-wide delegation."""
         mock_creds = MagicMock()
@@ -45,7 +45,7 @@ class TestGmailService:
         mock_creds.with_subject.assert_called_once_with('user@domain.com')
         mock_build.assert_called_once_with('gmail', 'v1', credentials=mock_delegated_creds)
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_fetch_emails_basic(self, mock_build):
         """Test basic email fetching."""
         mock_service = MagicMock()
@@ -99,7 +99,7 @@ class TestGmailService:
         assert emails[0]['from'] == 'sender@example.com'
         assert emails[0]['subject'] == 'Test Subject 1'
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_fetch_emails_with_query(self, mock_build):
         """Test email fetching with query parameters."""
         mock_service = MagicMock()
@@ -122,7 +122,7 @@ class TestGmailService:
         # Verify list was called with correct params
         mock_service.users().messages().list.assert_called()
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_fetch_emails_no_messages(self, mock_build):
         """Test fetching when no messages found."""
         mock_service = MagicMock()
@@ -135,7 +135,7 @@ class TestGmailService:
 
         assert emails == []
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_fetch_emails_handles_error_on_single_message(self, mock_build):
         """Test that errors on individual messages don't stop processing."""
         mock_service = MagicMock()
@@ -170,7 +170,7 @@ class TestGmailService:
         assert len(emails) == 1
         assert emails[0]['id'] == 'msg2'
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_extract_body_plain_text(self, mock_build):
         """Test extracting plain text body."""
         gmail = GmailService(credentials=MagicMock())
@@ -183,7 +183,7 @@ class TestGmailService:
         body = gmail._extract_body(payload)
         assert body == 'Plain text content'
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_extract_body_html(self, mock_build):
         """Test extracting and converting HTML body."""
         gmail = GmailService(credentials=MagicMock())
@@ -197,7 +197,7 @@ class TestGmailService:
         body = gmail._extract_body(payload)
         assert 'HTML content' in body
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_extract_body_multipart(self, mock_build):
         """Test extracting body from multipart message."""
         gmail = GmailService(credentials=MagicMock())
@@ -220,7 +220,7 @@ class TestGmailService:
         # Should prefer plain text
         assert body == 'Plain version'
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_extract_body_nested_multipart(self, mock_build):
         """Test extracting body from nested multipart message."""
         gmail = GmailService(credentials=MagicMock())
@@ -243,7 +243,7 @@ class TestGmailService:
         body = gmail._extract_body(payload)
         assert 'Nested plain text' in body
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_decode_base64_handles_errors(self, mock_build):
         """Test base64 decoding handles invalid data."""
         gmail = GmailService(credentials=MagicMock())
@@ -251,7 +251,7 @@ class TestGmailService:
         result = gmail._decode_base64('invalid!!base64')
         assert result == ''
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_html_to_text_removes_scripts_and_styles(self, mock_build):
         """Test HTML to text conversion removes scripts and styles."""
         gmail = GmailService(credentials=MagicMock())
@@ -271,7 +271,7 @@ class TestGmailService:
         assert 'alert' not in text
         assert 'color: red' not in text
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_fetch_thread(self, mock_build):
         """Test fetching email thread."""
         mock_service = MagicMock()
@@ -315,7 +315,7 @@ class TestGmailService:
         assert messages[0]['from'] == 'user1@example.com'
         assert messages[1]['from'] == 'user2@example.com'
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_fetch_thread_error(self, mock_build):
         """Test fetching thread handles errors."""
         mock_service = MagicMock()
@@ -328,7 +328,7 @@ class TestGmailService:
 
         assert messages == []
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_get_labels(self, mock_build):
         """Test fetching Gmail labels."""
         mock_service = MagicMock()
@@ -348,7 +348,7 @@ class TestGmailService:
         assert len(labels) == 3
         assert {'id': 'INBOX', 'name': 'INBOX'} in labels
 
-    @patch('services.gmail.build')
+    @patch('services.google.gmail.build')
     def test_get_labels_error(self, mock_build):
         """Test fetching labels handles errors."""
         mock_service = MagicMock()

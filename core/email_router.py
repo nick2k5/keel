@@ -14,36 +14,22 @@ logger = logging.getLogger(__name__)
 class EmailRouter:
     """Routes incoming emails to appropriate actions using LLM."""
 
-    # Available actions and their descriptions
-    ACTIONS = {
-        'GENERATE_MEMOS': {
-            'description': 'Generate investment memos for new companies in the sheet'
-        },
-        'ADD_COMPANY': {
-            'description': 'Add a new company to the deal flow spreadsheet. Extract company name and domain from the email.'
-        },
-        'UPDATE_COMPANY': {
-            'description': 'Update/correct a company\'s domain or name. Use when someone provides a correction like "Domain is X" or "Actually the domain is X".'
-        },
-        'REGENERATE_MEMO': {
-            'description': 'Regenerate an investment memo for a specific company. Use when a memo needs to be redone.'
-        },
-        'ANALYZE_THREAD': {
-            'description': 'Analyze a forwarded email thread to create a relationship timeline and summary. Use when email contains forwarded messages.'
-        },
-        'SUMMARIZE_UPDATES': {
-            'description': 'Summarize update emails from a company. Use when asked "how is [company] doing?" or "summarize updates from [company]".'
-        },
-        'SCRAPE_YC': {
-            'description': 'Scrape YC Bookface for companies in a specific batch and add them to the sheet. Default batch is W26.'
-        },
-        'HEALTH_CHECK': {
-            'description': 'Check if the service is running properly'
-        },
-        'NONE': {
-            'description': 'No action needed - not a valid command or unclear request'
-        }
-    }
+    # Cached action descriptions
+    _action_descriptions = None
+
+    @classmethod
+    def _get_action_descriptions(cls) -> Dict[str, Dict[str, str]]:
+        """Get action descriptions from centralized registry (lazy loaded)."""
+        if cls._action_descriptions is None:
+            # Import lazily to avoid circular imports
+            from actions import get_action_descriptions
+            cls._action_descriptions = get_action_descriptions()
+        return cls._action_descriptions
+
+    @property
+    def ACTIONS(self) -> Dict[str, Dict[str, str]]:
+        """Get action descriptions from centralized registry."""
+        return self._get_action_descriptions()
 
     def __init__(self):
         vertexai.init(project=config.project_id, location=config.vertex_ai_region)

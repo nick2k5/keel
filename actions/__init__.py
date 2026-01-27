@@ -1,4 +1,6 @@
 """Email command action handlers."""
+from typing import Dict
+
 from actions.base import BaseAction
 from actions.add_company import AddCompanyAction
 from actions.update_company import UpdateCompanyAction
@@ -19,9 +21,11 @@ __all__ = [
     'SummarizeUpdatesAction',
     'ScrapeYCAction',
     'HealthCheckAction',
+    'ACTION_REGISTRY',
+    'get_action_descriptions',
 ]
 
-# Action registry for easy lookup
+# Action registry for easy lookup - single source of truth
 ACTION_REGISTRY = {
     'ADD_COMPANY': AddCompanyAction,
     'UPDATE_COMPANY': UpdateCompanyAction,
@@ -32,3 +36,18 @@ ACTION_REGISTRY = {
     'SCRAPE_YC': ScrapeYCAction,
     'HEALTH_CHECK': HealthCheckAction,
 }
+
+
+def get_action_descriptions() -> Dict[str, Dict[str, str]]:
+    """Get action descriptions for LLM routing.
+
+    Returns:
+        Dict mapping action name to dict with 'description' key
+    """
+    descriptions = {
+        name: {'description': cls.description}
+        for name, cls in ACTION_REGISTRY.items()
+    }
+    # Add NONE action for when no action is needed
+    descriptions['NONE'] = {'description': 'No action needed - not a valid command or unclear request'}
+    return descriptions
