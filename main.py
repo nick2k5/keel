@@ -67,6 +67,15 @@ def process_email():
                 'message': 'No email data provided'
             }), 400
 
+        # Validate sender domain - only allow @friale.com
+        sender_email = email_data.get('from', '').lower()
+        if not sender_email.endswith('@friale.com'):
+            logger.warning(f"Rejected email from unauthorized sender: {sender_email}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Unauthorized sender domain'
+            }), 403
+
         # Create services
         factory = ServiceFactory.create()
         services = factory.create_all()
