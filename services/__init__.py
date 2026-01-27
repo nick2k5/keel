@@ -1,23 +1,45 @@
-"""Services package - re-exports all classes for backward compatibility."""
-from services.sheets import SheetsService
-from services.firestore import FirestoreService
-from services.drive import DriveService
-from services.docs import DocsService
-from services.gemini import GeminiService
-from services.research import ResearchService
+"""Services package."""
+# Google services (new location)
+from services.google import (
+    get_credentials,
+    get_gmail_credentials,
+    ServiceFactory,
+    SheetsService,
+    DriveService,
+    DocsService,
+    GmailService,
+    InboxSyncService,
+    FirestoreService,
+    GeminiService,
+)
+
+# Other services
 from services.bookface import BookfaceService
-from services.email_agent import EmailAgentService
-from services.gmail import GmailService, InboxSyncService
+from services.email_agent_new import EmailAgentService
+
+# Legacy - keep old ResearchService for backward compatibility during migration
+# TODO: Remove after migration complete
+try:
+    from services.research import ResearchService
+except ImportError:
+    ResearchService = None
 
 __all__ = [
+    # Credentials
+    'get_credentials',
+    'get_gmail_credentials',
+    'ServiceFactory',
+    # Google services
     'SheetsService',
     'FirestoreService',
     'DriveService',
     'DocsService',
     'GeminiService',
-    'ResearchService',
-    'BookfaceService',
-    'EmailAgentService',
     'GmailService',
     'InboxSyncService',
+    # Other services
+    'BookfaceService',
+    'EmailAgentService',
+    # Legacy
+    'ResearchService',
 ]

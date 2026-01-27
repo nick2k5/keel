@@ -41,6 +41,11 @@ wheels/
 # Logs
 *.log
 
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
 # Service account keys
 *-key.json
 *.json
