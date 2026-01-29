@@ -10,6 +10,7 @@ from actions.analyze_thread import AnalyzeThreadAction
 from actions.summarize_updates import SummarizeUpdatesAction
 from actions.scrape_yc import ScrapeYCAction
 from actions.health_check import HealthCheckAction
+from actions.answer_question import AnswerQuestionAction
 
 __all__ = [
     'BaseAction',
@@ -21,6 +22,7 @@ __all__ = [
     'SummarizeUpdatesAction',
     'ScrapeYCAction',
     'HealthCheckAction',
+    'AnswerQuestionAction',
     'ACTION_REGISTRY',
     'get_action_descriptions',
 ]
@@ -35,6 +37,7 @@ ACTION_REGISTRY = {
     'SUMMARIZE_UPDATES': SummarizeUpdatesAction,
     'SCRAPE_YC': ScrapeYCAction,
     'HEALTH_CHECK': HealthCheckAction,
+    'ANSWER_QUESTION': AnswerQuestionAction,
 }
 
 

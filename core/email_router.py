@@ -73,6 +73,19 @@ Respond with JSON only (no markdown):
   "also_do": null  // Optional: second action to perform after the first
 }}
 
+**ROUTING PRIORITY:**
+1. If it's clearly a command (add, regenerate, scrape, run) → use specific action
+2. If it's a question or inquiry about people/companies/relationships → ANSWER_QUESTION
+3. If it's a forwarded email thread → ANALYZE_THREAD
+4. Only return NONE if the request is completely unrelated to Keel's purpose
+
+**ANSWER_QUESTION:**
+- Use for ANY open-ended question, inquiry, or request for information
+- Examples: "What's happening with Stripe?", "When did I last talk to John?",
+  "Tell me about our relationship with Acme", "What do you know about this company?",
+  "Any updates on X?", "What's the status of Y?"
+- Parameters: {{"question": "the user's question"}}
+
 **HIGHEST PRIORITY - DETECTING CORRECTIONS:**
 If the user provides a correction or update to information Keel previously processed, you MUST use UPDATE_COMPANY.
 
@@ -110,9 +123,10 @@ Correction patterns to look for:
 - Use for: "status", "health", "check"
 
 **NONE:**
-- Use when the request is unclear or ambiguous
+- Use ONLY when the request is completely unrelated to Keel (e.g., "What's for lunch?")
+- Do NOT use NONE for questions about people, companies, or relationships - use ANSWER_QUESTION instead
 
-Be helpful. When in doubt, check the thread for context."""
+Be helpful. When in doubt, use ANSWER_QUESTION to provide a helpful response."""
 
         try:
             response = self.model.generate_content(

@@ -16,6 +16,7 @@ from services.google import (
 # Other services
 from services.bookface import BookfaceService
 from services.email_agent import EmailAgentService
+from services.question import QuestionService
 
 # Legacy - keep old ResearchService for backward compatibility during migration
 # TODO: Remove after migration complete
@@ -40,6 +41,7 @@ __all__ = [
     # Other services
     'BookfaceService',
     'EmailAgentService',
+    'QuestionService',
     # Legacy
     'ResearchService',
 ]
